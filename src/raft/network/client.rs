@@ -9,10 +9,11 @@ use openraft::raft::{
     VoteRequest, VoteResponse,
 };
 use openraft::{Entry, EntryPayload, LogId, Membership, Vote};
-use tonic::transport::Channel;
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 
 use super::proto::raft_service_client::RaftServiceClient;
 use super::proto::{self as pb};
+use crate::raft::config::TlsConfig;
 use crate::raft::types::{RaftNode, RaftRequest, TypeConfig};
 
 #[derive(Debug)]
@@ -30,34 +31,73 @@ pub struct GrpcRaftClient {
     #[allow(dead_code)]
     target_id: u64,
     addr: String,
-    use_tls: bool,
+    tls: TlsConfig,
     client: Option<RaftServiceClient<Channel>>,
 }
 
 impl GrpcRaftClient {
-    pub fn new(target_id: u64, node: &RaftNode, use_tls: bool) -> Self {
+    pub fn new(target_id: u64, node: &RaftNode, tls: TlsConfig) -> Self {
         Self {
             target_id,
             addr: node.addr.clone(),
-            use_tls,
+            tls,
             client: None,
         }
     }
 
     async fn get_client(&mut self) -> Result<&mut RaftServiceClient<Channel>, ConnectionError> {
         if self.client.is_none() {
-            let scheme = if self.use_tls { "https" } else { "http" };
+            let scheme = if self.tls.is_enabled() { "https" } else { "http" };
             let endpoint = format!("{}://{}", scheme, self.addr);
-            let channel = Channel::from_shared(endpoint)
+            let mut channel_builder = Channel::from_shared(endpoint)
                 .map_err(|e| ConnectionError(e.to_string()))?
                 .connect_timeout(Duration::from_secs(5))
-                .timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(10));
+
+            if self.tls.is_enabled() {
+                let tls_config = self.build_tls_config().await?;
+                channel_builder = channel_builder
+                    .tls_config(tls_config)
+                    .map_err(|e| ConnectionError(format!("TLS config error: {}", e)))?;
+            }
+
+            let channel = channel_builder
                 .connect()
                 .await
                 .map_err(|e| ConnectionError(e.to_string()))?;
+
             self.client = Some(RaftServiceClient::new(channel));
         }
         Ok(self.client.as_mut().unwrap())
+    }
+
+    async fn build_tls_config(&self) -> Result<ClientTlsConfig, ConnectionError> {
+        let mut tls_config = ClientTlsConfig::new();
+
+        if let Some(ca_path) = &self.tls.ca_cert {
+            let ca_cert = tokio::fs::read(ca_path)
+                .await
+                .map_err(|e| ConnectionError(format!("Failed to read CA cert: {}", e)))?;
+            tls_config = tls_config.ca_certificate(Certificate::from_pem(ca_cert));
+        }
+
+        if self.tls.is_mtls() {
+            let cert_path = self.tls.cert.as_ref()
+                .ok_or_else(|| ConnectionError("mTLS requires cert path".into()))?;
+            let key_path = self.tls.key.as_ref()
+                .ok_or_else(|| ConnectionError("mTLS requires key path".into()))?;
+
+            let cert = tokio::fs::read(cert_path)
+                .await
+                .map_err(|e| ConnectionError(format!("Failed to read cert: {}", e)))?;
+            let key = tokio::fs::read(key_path)
+                .await
+                .map_err(|e| ConnectionError(format!("Failed to read key: {}", e)))?;
+
+            tls_config = tls_config.identity(Identity::from_pem(cert, key));
+        }
+
+        Ok(tls_config)
     }
 }
 

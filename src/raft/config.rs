@@ -1,4 +1,60 @@
+use std::path::PathBuf;
 use std::time::Duration;
+
+#[derive(Clone, Debug, Default)]
+pub enum TlsMode {
+    #[default]
+    Disabled,
+    Tls,
+    Mtls,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TlsConfig {
+    pub mode: TlsMode,
+    pub ca_cert: Option<PathBuf>,
+    pub cert: Option<PathBuf>,
+    pub key: Option<PathBuf>,
+}
+
+impl TlsConfig {
+    pub fn disabled() -> Self {
+        Self {
+            mode: TlsMode::Disabled,
+            ..Default::default()
+        }
+    }
+
+    pub fn tls(ca_cert: impl Into<PathBuf>) -> Self {
+        Self {
+            mode: TlsMode::Tls,
+            ca_cert: Some(ca_cert.into()),
+            cert: None,
+            key: None,
+        }
+    }
+
+    pub fn mtls(
+        ca_cert: impl Into<PathBuf>,
+        cert: impl Into<PathBuf>,
+        key: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            mode: TlsMode::Mtls,
+            ca_cert: Some(ca_cert.into()),
+            cert: Some(cert.into()),
+            key: Some(key.into()),
+        }
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        !matches!(self.mode, TlsMode::Disabled)
+    }
+
+    pub fn is_mtls(&self) -> bool {
+        matches!(self.mode, TlsMode::Mtls)
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct RaftConfig {
@@ -9,7 +65,7 @@ pub struct RaftConfig {
     pub election_timeout: Duration,
     pub heartbeat_interval: Duration,
     pub snapshot_threshold: u64,
-    pub use_tls: bool,
+    pub tls: TlsConfig,
 }
 
 impl RaftConfig {
@@ -22,7 +78,7 @@ impl RaftConfig {
             election_timeout: Duration::from_millis(500),
             heartbeat_interval: Duration::from_millis(100),
             snapshot_threshold: 1000,
-            use_tls: false,
+            tls: TlsConfig::disabled(),
         }
     }
 
@@ -56,8 +112,19 @@ impl RaftConfig {
         self
     }
 
+    pub fn tls(mut self, tls: TlsConfig) -> Self {
+        self.tls = tls;
+        self
+    }
+
+    #[deprecated(since = "0.4.0", note = "Use .tls(TlsConfig::tls(...)) instead")]
     pub fn use_tls(mut self, use_tls: bool) -> Self {
-        self.use_tls = use_tls;
+        if use_tls {
+            self.tls = TlsConfig {
+                mode: TlsMode::Tls,
+                ..Default::default()
+            };
+        }
         self
     }
 }

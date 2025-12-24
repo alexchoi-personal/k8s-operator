@@ -41,7 +41,7 @@ impl RaftNodeManager {
 
         let store = Arc::new(MemStore::new());
         let (log_storage, state_machine) = Adaptor::new(store.clone());
-        let network = GrpcNetworkFactory::with_tls(config.use_tls);
+        let network = GrpcNetworkFactory::with_tls(config.tls.clone());
 
         let raft = Raft::new(
             config.node_id,
@@ -84,7 +84,7 @@ impl RaftNodeManager {
                 .map_err(|e| Error::Other(format!("Failed to open RocksDB: {:?}", e)))?,
         );
         let (log_storage, state_machine) = Adaptor::new(store.clone());
-        let network = GrpcNetworkFactory::with_tls(config.use_tls);
+        let network = GrpcNetworkFactory::with_tls(config.tls.clone());
 
         let raft = Raft::new(
             config.node_id,

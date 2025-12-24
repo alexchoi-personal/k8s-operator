@@ -15,6 +15,7 @@ pub use types::*;
 pub use raft::{
     ClusterManager, HeadlessServiceDiscovery, LeaderElection, LeaderGuard,
     MemLogStorage, MemStateMachine, MemStore, RaftConfig, RaftNodeManager,
+    TlsConfig, TlsMode,
 };
 
 #[cfg(feature = "rocksdb")]

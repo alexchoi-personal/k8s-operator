@@ -9,7 +9,7 @@ pub mod node;
 pub mod storage;
 
 pub use cluster::ClusterManager;
-pub use config::RaftConfig;
+pub use config::{RaftConfig, TlsConfig, TlsMode};
 pub use discovery::HeadlessServiceDiscovery;
 pub use leader::{LeaderElection, LeaderGuard};
 pub use node::RaftNodeManager;
