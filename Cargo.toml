@@ -30,7 +30,7 @@ chrono = { version = "0.4", features = ["serde"] }
 openraft = { version = "0.9", features = ["serde"], optional = true }
 openraft-memstore = { version = "0.9", optional = true }
 parking_lot = { version = "0.12", optional = true }
-tonic = { version = "0.12", optional = true }
+tonic = { version = "0.12", features = ["tls"], optional = true }
 prost = { version = "0.13", optional = true }
 tokio-stream = { version = "0.1", optional = true }
 rocksdb = { version = "0.22", optional = true }

@@ -4,10 +4,12 @@ use std::sync::Arc;
 
 use openraft::raft::{AppendEntriesRequest, AppendEntriesResponse, InstallSnapshotRequest, VoteRequest};
 use openraft::{Entry, EntryPayload, LogId, Membership, Raft, SnapshotMeta, StoredMembership, Vote};
+use tonic::transport::{Certificate, Identity, ServerTlsConfig};
 use tonic::{Request, Response, Status};
 
 use super::proto::raft_service_server::{RaftService, RaftServiceServer};
 use super::proto::{self as pb};
+use crate::raft::config::TlsConfig;
 use crate::raft::types::{RaftNode, RaftRequest, TypeConfig};
 
 pub struct RaftGrpcServer {
@@ -169,13 +171,57 @@ impl RaftService for RaftGrpcServer {
 pub async fn start_raft_server(
     raft: Arc<Raft<TypeConfig>>,
     addr: SocketAddr,
-) -> Result<(), tonic::transport::Error> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    start_raft_server_with_tls(raft, addr, TlsConfig::default()).await
+}
+
+pub async fn start_raft_server_with_tls(
+    raft: Arc<Raft<TypeConfig>>,
+    addr: SocketAddr,
+    tls: TlsConfig,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let server = RaftGrpcServer::new(raft);
 
-    tracing::info!("Starting Raft gRPC server on {}", addr);
+    tracing::info!("Starting Raft gRPC server on {} (TLS: {})", addr, tls.is_enabled());
 
-    tonic::transport::Server::builder()
+    let mut builder = tonic::transport::Server::builder();
+
+    if tls.is_enabled() {
+        let tls_config = build_server_tls_config(&tls).await?;
+        builder = builder.tls_config(tls_config)?;
+    }
+
+    builder
         .add_service(RaftServiceServer::new(server))
         .serve(addr)
-        .await
+        .await?;
+
+    Ok(())
+}
+
+async fn build_server_tls_config(
+    tls: &TlsConfig,
+) -> Result<ServerTlsConfig, Box<dyn std::error::Error + Send + Sync>> {
+    let cert_path = tls
+        .cert
+        .as_ref()
+        .ok_or("TLS requires cert path")?;
+    let key_path = tls
+        .key
+        .as_ref()
+        .ok_or("TLS requires key path")?;
+
+    let cert = tokio::fs::read(cert_path).await?;
+    let key = tokio::fs::read(key_path).await?;
+
+    let mut tls_config = ServerTlsConfig::new().identity(Identity::from_pem(cert, key));
+
+    if tls.is_mtls() {
+        if let Some(ca_path) = &tls.ca_cert {
+            let ca_cert = tokio::fs::read(ca_path).await?;
+            tls_config = tls_config.client_ca_root(Certificate::from_pem(ca_cert));
+        }
+    }
+
+    Ok(tls_config)
 }
