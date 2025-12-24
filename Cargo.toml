@@ -1,0 +1,46 @@
+[package]
+name = "k8s-operator"
+version = "0.1.0"
+edition = "2021"
+description = "A highly-available Kubernetes operator framework using Raft consensus"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yourusername/k8s-operator"
+keywords = ["kubernetes", "operator", "raft", "ha", "distributed"]
+categories = ["development-tools", "asynchronous"]
+
+[workspace]
+members = [
+    "crates/k8s-operator-core",
+    "crates/k8s-operator-raft",
+    "crates/k8s-operator-storage",
+    "crates/k8s-operator-controller",
+    "crates/k8s-operator-derive",
+    "examples/simple-operator",
+]
+
+[dependencies]
+k8s-operator-core = { path = "crates/k8s-operator-core" }
+k8s-operator-raft = { path = "crates/k8s-operator-raft" }
+k8s-operator-storage = { path = "crates/k8s-operator-storage" }
+k8s-operator-controller = { path = "crates/k8s-operator-controller" }
+k8s-operator-derive = { path = "crates/k8s-operator-derive" }
+
+[workspace.dependencies]
+openraft = "0.10"
+rocksdb = "0.22"
+kube = { version = "0.98", features = ["runtime", "derive"] }
+k8s-openapi = { version = "0.24", features = ["v1_32"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tonic = "0.12"
+tonic-build = "0.12"
+prost = "0.13"
+async-trait = "0.1"
+futures = "0.3"
+bytes = "1"
+parking_lot = "0.12"
+schemars = "0.8"

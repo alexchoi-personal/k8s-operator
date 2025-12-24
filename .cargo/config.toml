@@ -1,0 +1,9 @@
+# To use vendored dependencies, run:
+#   cargo vendor
+# Then uncomment the following lines:
+#
+# [source.crates-io]
+# replace-with = "vendored-sources"
+#
+# [source.vendored-sources]
+# directory = "vendor"

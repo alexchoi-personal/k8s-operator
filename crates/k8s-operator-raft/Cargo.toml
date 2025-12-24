@@ -1,0 +1,27 @@
+[package]
+name = "k8s-operator-raft"
+version = "0.1.0"
+edition = "2021"
+description = "Raft consensus implementation for k8s-operator framework"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+k8s-operator-core = { path = "../k8s-operator-core" }
+k8s-operator-storage = { path = "../k8s-operator-storage" }
+openraft = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tonic = { workspace = true }
+prost = { workspace = true }
+futures = { workspace = true }
+bytes = { workspace = true }
+parking_lot = { workspace = true }
+async-stream = "0.3"
+tokio-stream = "0.1"
+
+[build-dependencies]
+tonic-build = { workspace = true }

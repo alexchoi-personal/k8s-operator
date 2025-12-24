@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package raft;
+
+service RaftService {
+    rpc Vote(VoteRequest) returns (VoteResponse);
+    rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
+    rpc InstallSnapshot(stream InstallSnapshotRequest) returns (InstallSnapshotResponse);
+}
+
+message VoteRequest {
+    uint64 term = 1;
+    uint64 candidate_id = 2;
+    uint64 last_log_index = 3;
+    uint64 last_log_term = 4;
+}
+
+message VoteResponse {
+    uint64 term = 1;
+    bool vote_granted = 2;
+    uint64 last_log_index = 3;
+}
+
+message LogEntry {
+    uint64 term = 1;
+    uint64 index = 2;
+    bytes data = 3;
+    EntryType entry_type = 4;
+}
+
+enum EntryType {
+    ENTRY_TYPE_BLANK = 0;
+    ENTRY_TYPE_NORMAL = 1;
+    ENTRY_TYPE_MEMBERSHIP = 2;
+}
+
+message AppendEntriesRequest {
+    uint64 term = 1;
+    uint64 leader_id = 2;
+    uint64 prev_log_index = 3;
+    uint64 prev_log_term = 4;
+    repeated LogEntry entries = 5;
+    uint64 leader_commit = 6;
+}
+
+message AppendEntriesResponse {
+    uint64 term = 1;
+    bool success = 2;
+    uint64 match_index = 3;
+    uint64 conflict_index = 4;
+    uint64 conflict_term = 5;
+}
+
+message InstallSnapshotRequest {
+    uint64 term = 1;
+    uint64 leader_id = 2;
+    uint64 last_included_index = 3;
+    uint64 last_included_term = 4;
+    uint64 offset = 5;
+    bytes data = 6;
+    bool done = 7;
+}
+
+message InstallSnapshotResponse {
+    uint64 term = 1;
+}
