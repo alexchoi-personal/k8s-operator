@@ -1,6 +1,6 @@
 # k8s-operator
 
-A highly-available Kubernetes operator framework using Raft consensus.
+A batteries-included Kubernetes operator framework with Raft consensus for high availability.
 
 [![Crates.io](https://img.shields.io/crates/v/k8s-operator.svg)](https://crates.io/crates/k8s-operator)
 [![License](https://img.shields.io/crates/l/k8s-operator.svg)](LICENSE)
@@ -11,6 +11,7 @@ A highly-available Kubernetes operator framework using Raft consensus.
 
 ## Features
 
+- **Batteries Included**: All dependencies re-exported - just add `k8s-operator`
 - **High Availability**: Run multiple operator replicas with automatic leader election
 - **Raft Consensus**: Built on openraft for distributed consensus
 - **Kubernetes Native**: Uses kube-rs for Kubernetes API interactions
@@ -21,8 +22,10 @@ A highly-available Kubernetes operator framework using Raft consensus.
 
 ```toml
 [dependencies]
-k8s-operator = "0.1"
+k8s-operator = "0.2"
 ```
+
+That's it! No need to add `kube`, `k8s-openapi`, `schemars`, `tokio`, `serde`, etc. - everything is re-exported.
 
 ## Crate Structure
 

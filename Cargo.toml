@@ -1,46 +1,22 @@
 [package]
 name = "k8s-operator"
-version = "0.1.1"
+version = "0.3.0"
 edition = "2021"
-description = "A highly-available Kubernetes operator framework using Raft consensus"
+description = "A batteries-included Kubernetes operator framework"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/alexchoi0/k8s-operator"
-keywords = ["kubernetes", "operator", "raft", "ha", "distributed"]
+keywords = ["kubernetes", "operator", "k8s", "controller"]
 categories = ["development-tools", "asynchronous"]
 
-[workspace]
-members = [
-    "crates/k8s-operator-core",
-    "crates/k8s-operator-raft",
-    "crates/k8s-operator-storage",
-    "crates/k8s-operator-controller",
-    "crates/k8s-operator-derive",
-]
-
 [dependencies]
-k8s-operator-core = { path = "crates/k8s-operator-core", version = "0.1.1" }
-k8s-operator-raft = { path = "crates/k8s-operator-raft", version = "0.1.1" }
-k8s-operator-storage = { path = "crates/k8s-operator-storage", version = "0.1.1" }
-k8s-operator-controller = { path = "crates/k8s-operator-controller", version = "0.1.1" }
-k8s-operator-derive = { path = "crates/k8s-operator-derive", version = "0.1.1" }
-
-[workspace.dependencies]
-openraft = { version = "0.9", features = ["serde"] }
-openraft-memstore = "0.9"
-rocksdb = "0.22"
 kube = { version = "2.0.1", features = ["runtime", "derive"] }
-k8s-openapi = { version = "0.26.0", features = ["latest", "schemars"] }
+k8s-openapi = { version = "0.26.0", features = ["latest"] }
 tokio = { version = "1", features = ["full"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tonic = "0.12"
-tonic-build = "0.12"
-prost = "0.13"
 async-trait = "0.1"
 futures = "0.3"
-bytes = "1"
-parking_lot = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 schemars = "1"
+thiserror = "2"
+tracing = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
