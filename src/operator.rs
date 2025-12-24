@@ -12,6 +12,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info};
 
+#[cfg(feature = "ha")]
+use crate::raft::{LeaderElection, RaftConfig};
+
 pub type ReconcileFn<R> =
     Box<dyn Fn(Context<R>) -> Pin<Box<dyn Future<Output = Result<Action>> + Send>> + Send + Sync>;
 
@@ -25,6 +28,8 @@ where
     finalizer: Option<String>,
     requeue_after: Duration,
     error_requeue: Duration,
+    #[cfg(feature = "ha")]
+    raft_config: Option<RaftConfig>,
     _marker: std::marker::PhantomData<R>,
 }
 
@@ -50,6 +55,8 @@ where
             finalizer: None,
             requeue_after: Duration::from_secs(300),
             error_requeue: Duration::from_secs(60),
+            #[cfg(feature = "ha")]
+            raft_config: None,
             _marker: std::marker::PhantomData,
         }
     }
@@ -96,6 +103,12 @@ where
         self
     }
 
+    #[cfg(feature = "ha")]
+    pub fn with_leader_election(mut self, config: RaftConfig) -> Self {
+        self.raft_config = Some(config);
+        self
+    }
+
     pub async fn run(self) -> Result<()> {
         let client = Client::try_default().await.map_err(Error::Kube)?;
 
@@ -113,6 +126,12 @@ where
         let default_requeue = self.requeue_after;
         let error_requeue = self.error_requeue;
 
+        #[cfg(feature = "ha")]
+        let leader_election = self.raft_config.map(|config| {
+            info!("Leader election enabled for node {}", config.node_id);
+            Arc::new(LeaderElection::new(config.node_id))
+        });
+
         let controller_ctx = ControllerContext {
             client: client.clone(),
             reconcile_fn,
@@ -120,6 +139,8 @@ where
             finalizer,
             default_requeue,
             error_requeue,
+            #[cfg(feature = "ha")]
+            leader_election,
         };
 
         Controller::new(api, WatcherConfig::default())
@@ -162,6 +183,8 @@ where
     #[allow(dead_code)]
     default_requeue: Duration,
     error_requeue: Duration,
+    #[cfg(feature = "ha")]
+    leader_election: Option<Arc<LeaderElection>>,
 }
 
 impl<R> Clone for ControllerContext<R>
@@ -177,6 +200,8 @@ where
             finalizer: self.finalizer.clone(),
             default_requeue: self.default_requeue,
             error_requeue: self.error_requeue,
+            #[cfg(feature = "ha")]
+            leader_election: self.leader_election.as_ref().map(Arc::clone),
         }
     }
 }
@@ -189,6 +214,13 @@ where
     R: Resource<DynamicType = (), Scope = NamespaceResourceScope> + Clone + std::fmt::Debug + Send + Sync + 'static,
     R: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
+    #[cfg(feature = "ha")]
+    if let Some(ref leader_election) = ctx.leader_election {
+        if !leader_election.is_leader() {
+            return Ok(Action::requeue(Duration::from_secs(5)));
+        }
+    }
+
     let namespace = resource.namespace().unwrap_or_default();
     let name = resource.name_any();
 
