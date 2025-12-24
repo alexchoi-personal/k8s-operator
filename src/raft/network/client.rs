@@ -30,21 +30,24 @@ pub struct GrpcRaftClient {
     #[allow(dead_code)]
     target_id: u64,
     addr: String,
+    use_tls: bool,
     client: Option<RaftServiceClient<Channel>>,
 }
 
 impl GrpcRaftClient {
-    pub fn new(target_id: u64, node: &RaftNode) -> Self {
+    pub fn new(target_id: u64, node: &RaftNode, use_tls: bool) -> Self {
         Self {
             target_id,
             addr: node.addr.clone(),
+            use_tls,
             client: None,
         }
     }
 
     async fn get_client(&mut self) -> Result<&mut RaftServiceClient<Channel>, ConnectionError> {
         if self.client.is_none() {
-            let endpoint = format!("http://{}", self.addr);
+            let scheme = if self.use_tls { "https" } else { "http" };
+            let endpoint = format!("{}://{}", scheme, self.addr);
             let channel = Channel::from_shared(endpoint)
                 .map_err(|e| ConnectionError(e.to_string()))?
                 .connect_timeout(Duration::from_secs(5))

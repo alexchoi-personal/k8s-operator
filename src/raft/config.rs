@@ -9,6 +9,7 @@ pub struct RaftConfig {
     pub election_timeout: Duration,
     pub heartbeat_interval: Duration,
     pub snapshot_threshold: u64,
+    pub use_tls: bool,
 }
 
 impl RaftConfig {
@@ -21,6 +22,7 @@ impl RaftConfig {
             election_timeout: Duration::from_millis(500),
             heartbeat_interval: Duration::from_millis(100),
             snapshot_threshold: 1000,
+            use_tls: false,
         }
     }
 
@@ -51,6 +53,11 @@ impl RaftConfig {
 
     pub fn snapshot_threshold(mut self, threshold: u64) -> Self {
         self.snapshot_threshold = threshold;
+        self
+    }
+
+    pub fn use_tls(mut self, use_tls: bool) -> Self {
+        self.use_tls = use_tls;
         self
     }
 }
