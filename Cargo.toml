@@ -2,11 +2,15 @@
 name = "k8s-operator"
 version = "0.3.0"
 edition = "2021"
-description = "A batteries-included Kubernetes operator framework"
+description = "A batteries-included Kubernetes operator framework with optional HA support"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/alexchoi0/k8s-operator"
-keywords = ["kubernetes", "operator", "k8s", "controller"]
+keywords = ["kubernetes", "operator", "k8s", "controller", "ha"]
 categories = ["development-tools", "asynchronous"]
+
+[features]
+default = []
+ha = ["openraft", "openraft-memstore", "parking_lot"]
 
 [dependencies]
 kube = { version = "2.0.1", features = ["runtime", "derive"] }
@@ -20,3 +24,8 @@ schemars = "1"
 thiserror = "2"
 tracing = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
+
+# HA/Raft dependencies (optional)
+openraft = { version = "0.9", features = ["serde"], optional = true }
+openraft-memstore = { version = "0.9", optional = true }
+parking_lot = { version = "0.12", optional = true }

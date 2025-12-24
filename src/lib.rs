@@ -3,10 +3,16 @@ pub mod error;
 pub mod operator;
 pub mod types;
 
+#[cfg(feature = "ha")]
+pub mod raft;
+
 pub use context::{Condition, Context};
 pub use error::{Error, Result};
 pub use operator::Operator;
 pub use types::*;
+
+#[cfg(feature = "ha")]
+pub use raft::{HeadlessServiceDiscovery, LeaderElection, LeaderGuard, RaftConfig};
 
 pub mod prelude {
     pub use crate::context::{Condition, Context};
