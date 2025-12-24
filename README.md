@@ -263,18 +263,32 @@ NetworkPolicy::new("my-policy")
 
 ## High Availability (HA)
 
-Enable the `ha` feature for Raft-based leader election:
+Enable the `ha` feature for Raft-based leader election with replicated logs:
+
+```toml
+[dependencies]
+k8s-operator = { version = "0.3", features = ["ha"] }
+```
+
+### Features
+
+- **Raft Consensus**: Full Raft implementation using [openraft](https://github.com/datafuselabs/openraft)
+- **gRPC Transport**: Inter-node communication via gRPC (tonic) on port 8080
+- **Automatic Leader Election**: ~500ms failover when leader dies
+- **Log Replication**: All state replicated across nodes before acknowledgment
+- **Autoscaling Support**: Handles horizontal scaling without disruption
+- **DNS-based Discovery**: Automatic peer discovery via headless service
+
+### Usage
 
 ```rust
 use k8s_operator::prelude::*;
-use k8s_operator::RaftConfig;
+use k8s_operator::{RaftConfig, RaftNodeManager};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let pod_name = std::env::var("POD_NAME").unwrap_or_else(|_| "node-0".into());
-    let node_id: u64 = pod_name.rsplit('-').next()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
+    // Automatically parse node ID from StatefulSet pod name (e.g., "my-operator-0" -> 0)
+    let node_id = RaftNodeManager::node_id_from_hostname()?;
 
     Operator::<MyResource>::new()
         .reconcile(reconcile)
@@ -289,7 +303,15 @@ async fn main() -> Result<()> {
 }
 ```
 
-### Kubernetes Deployment for HA
+### How It Works
+
+1. **Bootstrap**: The first node (node-0) bootstraps a new Raft cluster
+2. **Join**: Additional nodes join as learners, then become voters
+3. **Leader Election**: Raft elects a leader; only the leader runs reconciliation
+4. **Failover**: If leader dies, remaining nodes elect a new leader (~500ms)
+5. **Scaling**: `ClusterManager` watches DNS for pod changes and updates membership
+
+### Kubernetes Deployment
 
 ```yaml
 apiVersion: v1
@@ -322,8 +344,15 @@ spec:
       containers:
         - name: operator
           image: my-operator:latest
+          ports:
+            - containerPort: 8080
+              name: raft
           env:
             - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: HOSTNAME
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
@@ -331,6 +360,41 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+```
+
+### Autoscaling Behavior
+
+| Operation | Behavior |
+|-----------|----------|
+| Scale up | New pods discovered via DNS, added as learners, then voters |
+| Scale down | Removed pods detected, membership updated, logs redistributed |
+| Pod restart | Same node ID rejoins, catches up from leader's log |
+| Leader dies | New election in ~500ms, reconciliation continues |
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│                 Operator Pod                    │
+│  ┌──────────────┐    ┌──────────────────────┐  │
+│  │  Reconciler  │    │   RaftNodeManager    │  │
+│  │              │    │  ┌────────────────┐  │  │
+│  │ if is_leader │◄───│  │   Raft Node    │  │  │
+│  │   reconcile  │    │  └───────┬────────┘  │  │
+│  └──────────────┘    │          │           │  │
+│                      │  ┌───────▼────────┐  │  │
+│                      │  │  gRPC Server   │  │  │
+│                      │  │    :8080       │  │  │
+│                      │  └───────┬────────┘  │  │
+│                      └──────────┼───────────┘  │
+└─────────────────────────────────┼──────────────┘
+                                  │ gRPC
+              ┌───────────────────┼───────────────────┐
+              │                   │                   │
+     ┌────────▼────────┐ ┌────────▼────────┐ ┌────────▼────────┐
+     │    Pod 0        │ │    Pod 1        │ │    Pod 2        │
+     │   (leader)      │ │   (follower)    │ │   (follower)    │
+     └─────────────────┘ └─────────────────┘ └─────────────────┘
 ```
 
 ## Available Types

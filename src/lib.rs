@@ -12,7 +12,10 @@ pub use operator::Operator;
 pub use types::*;
 
 #[cfg(feature = "ha")]
-pub use raft::{HeadlessServiceDiscovery, LeaderElection, LeaderGuard, RaftConfig};
+pub use raft::{
+    ClusterManager, HeadlessServiceDiscovery, LeaderElection, LeaderGuard,
+    MemLogStorage, MemStateMachine, MemStore, RaftConfig, RaftNodeManager,
+};
 
 pub mod prelude {
     pub use crate::context::{Condition, Context};

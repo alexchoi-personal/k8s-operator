@@ -1,0 +1,93 @@
+syntax = "proto3";
+package raft;
+
+service RaftService {
+  rpc Vote(VoteRequest) returns (VoteResponse);
+  rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
+  rpc InstallSnapshot(InstallSnapshotRequest) returns (InstallSnapshotResponse);
+}
+
+message VoteRequest {
+  Vote vote = 1;
+  optional LogId last_log_id = 2;
+}
+
+message VoteResponse {
+  Vote vote = 1;
+  bool vote_granted = 2;
+  optional LogId last_log_id = 3;
+}
+
+message AppendEntriesRequest {
+  Vote vote = 1;
+  optional LogId prev_log_id = 2;
+  repeated Entry entries = 3;
+  optional LogId leader_commit = 4;
+}
+
+message AppendEntriesResponse {
+  Vote vote = 1;
+  bool success = 2;
+  optional LogId conflict = 3;
+}
+
+message InstallSnapshotRequest {
+  Vote vote = 1;
+  SnapshotMeta meta = 2;
+  uint64 offset = 3;
+  bytes data = 4;
+  bool done = 5;
+}
+
+message InstallSnapshotResponse {
+  Vote vote = 1;
+}
+
+message Vote {
+  uint64 leader_id = 1;
+  uint64 term = 2;
+  bool committed = 3;
+}
+
+message LogId {
+  uint64 term = 1;
+  uint64 index = 2;
+}
+
+message Entry {
+  LogId log_id = 1;
+  EntryPayload payload = 2;
+}
+
+message EntryPayload {
+  oneof payload {
+    Empty blank = 1;
+    NormalPayload normal = 2;
+    MembershipPayload membership = 3;
+  }
+}
+
+message Empty {}
+
+message NormalPayload {
+  string key = 1;
+  string value = 2;
+}
+
+message MembershipPayload {
+  repeated MembershipConfig configs = 1;
+}
+
+message MembershipConfig {
+  map<uint64, RaftNode> nodes = 1;
+}
+
+message RaftNode {
+  string addr = 1;
+}
+
+message SnapshotMeta {
+  optional LogId last_log_id = 1;
+  string snapshot_id = 2;
+  MembershipPayload last_membership = 3;
+}

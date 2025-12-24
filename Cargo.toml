@@ -10,7 +10,7 @@ categories = ["development-tools", "asynchronous"]
 
 [features]
 default = []
-ha = ["openraft", "openraft-memstore", "parking_lot"]
+ha = ["openraft", "openraft-memstore", "parking_lot", "tonic", "prost", "tokio-stream"]
 
 [dependencies]
 kube = { version = "2.0.1", features = ["runtime", "derive"] }
@@ -29,3 +29,9 @@ chrono = { version = "0.4", features = ["serde"] }
 openraft = { version = "0.9", features = ["serde"], optional = true }
 openraft-memstore = { version = "0.9", optional = true }
 parking_lot = { version = "0.12", optional = true }
+tonic = { version = "0.12", optional = true }
+prost = { version = "0.13", optional = true }
+tokio-stream = { version = "0.1", optional = true }
+
+[build-dependencies]
+tonic-build = "0.12"
