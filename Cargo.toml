@@ -11,6 +11,7 @@ categories = ["development-tools", "asynchronous"]
 [features]
 default = []
 ha = ["openraft", "openraft-memstore", "parking_lot", "tonic", "prost", "tokio-stream"]
+ha-persist = ["ha", "rocksdb"]
 
 [dependencies]
 kube = { version = "2.0.1", features = ["runtime", "derive"] }
@@ -32,6 +33,11 @@ parking_lot = { version = "0.12", optional = true }
 tonic = { version = "0.12", optional = true }
 prost = { version = "0.13", optional = true }
 tokio-stream = { version = "0.1", optional = true }
+rocksdb = { version = "0.22", optional = true }
 
 [build-dependencies]
 tonic-build = "0.12"
+
+[dev-dependencies]
+tempfile = "3"
+serial_test = "3"

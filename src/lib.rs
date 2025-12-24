@@ -17,6 +17,9 @@ pub use raft::{
     MemLogStorage, MemStateMachine, MemStore, RaftConfig, RaftNodeManager,
 };
 
+#[cfg(feature = "rocksdb")]
+pub use raft::{RocksDbLogStorage, RocksDbStateMachine, RocksDbStore};
+
 pub mod prelude {
     pub use crate::context::{Condition, Context};
     pub use crate::error::{Error, Result};

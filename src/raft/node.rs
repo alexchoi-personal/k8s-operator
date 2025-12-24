@@ -11,13 +11,21 @@ use crate::raft::config::RaftConfig;
 use crate::raft::leader::LeaderElection;
 use crate::raft::network::{start_raft_server, GrpcNetworkFactory};
 use crate::raft::storage::MemStore;
+#[cfg(feature = "rocksdb")]
+use crate::raft::storage::RocksDbStore;
 use crate::raft::types::{RaftNode, TypeConfig};
+
+pub enum StorageBackend {
+    Memory(Arc<MemStore>),
+    #[cfg(feature = "rocksdb")]
+    RocksDb(Arc<RocksDbStore>),
+}
 
 pub struct RaftNodeManager {
     config: RaftConfig,
     raft: Arc<Raft<TypeConfig>>,
     leader_election: Arc<LeaderElection>,
-    store: Arc<MemStore>,
+    storage: StorageBackend,
     shutdown_tx: watch::Sender<bool>,
 }
 
@@ -53,7 +61,50 @@ impl RaftNodeManager {
             config,
             raft,
             leader_election,
-            store,
+            storage: StorageBackend::Memory(store),
+            shutdown_tx,
+        })
+    }
+
+    #[cfg(feature = "rocksdb")]
+    pub async fn new_with_rocksdb<P: AsRef<std::path::Path>>(
+        config: RaftConfig,
+        data_dir: P,
+    ) -> Result<Self> {
+        let raft_config = Arc::new(Config {
+            cluster_name: config.cluster_name.clone(),
+            election_timeout_min: config.election_timeout.as_millis() as u64,
+            election_timeout_max: config.election_timeout.as_millis() as u64 * 2,
+            heartbeat_interval: config.heartbeat_interval.as_millis() as u64,
+            ..Default::default()
+        });
+
+        let store = Arc::new(
+            RocksDbStore::new(data_dir)
+                .map_err(|e| Error::Other(format!("Failed to open RocksDB: {:?}", e)))?,
+        );
+        let (log_storage, state_machine) = Adaptor::new(store.clone());
+        let network = GrpcNetworkFactory::new();
+
+        let raft = Raft::new(
+            config.node_id,
+            raft_config,
+            network,
+            log_storage,
+            state_machine,
+        )
+        .await
+        .map_err(|e| Error::Other(format!("Failed to create Raft node: {:?}", e)))?;
+
+        let raft = Arc::new(raft);
+        let leader_election = Arc::new(LeaderElection::new(config.node_id));
+        let (shutdown_tx, _) = watch::channel(false);
+
+        Ok(Self {
+            config,
+            raft,
+            leader_election,
+            storage: StorageBackend::RocksDb(store),
             shutdown_tx,
         })
     }
@@ -156,8 +207,24 @@ impl RaftNodeManager {
         &self.leader_election
     }
 
-    pub fn store(&self) -> &Arc<MemStore> {
-        &self.store
+    pub fn config(&self) -> &RaftConfig {
+        &self.config
+    }
+
+    pub fn mem_store(&self) -> Option<&Arc<MemStore>> {
+        match &self.storage {
+            StorageBackend::Memory(store) => Some(store),
+            #[cfg(feature = "rocksdb")]
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "rocksdb")]
+    pub fn rocksdb_store(&self) -> Option<&Arc<RocksDbStore>> {
+        match &self.storage {
+            StorageBackend::RocksDb(store) => Some(store),
+            _ => None,
+        }
     }
 
     pub async fn add_member(&self, node_id: u64, addr: String) -> Result<()> {

@@ -15,3 +15,6 @@ pub use leader::{LeaderElection, LeaderGuard};
 pub use node::RaftNodeManager;
 pub use storage::{MemLogStorage, MemStateMachine, MemStore};
 pub use types::{NodeId, RaftNode, RaftRequest, RaftResponse, RaftTypeConfig, TypeConfig};
+
+#[cfg(feature = "rocksdb")]
+pub use storage::{RocksDbLogStorage, RocksDbStateMachine, RocksDbStore};

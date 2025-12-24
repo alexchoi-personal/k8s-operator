@@ -270,6 +270,13 @@ Enable the `ha` feature for Raft-based leader election with replicated logs:
 k8s-operator = { version = "0.3", features = ["ha"] }
 ```
 
+For persistent storage with RocksDB (survives pod restarts):
+
+```toml
+[dependencies]
+k8s-operator = { version = "0.3", features = ["ha-persist"] }
+```
+
 ### Features
 
 - **Raft Consensus**: Full Raft implementation using [openraft](https://github.com/datafuselabs/openraft)
@@ -278,6 +285,7 @@ k8s-operator = { version = "0.3", features = ["ha"] }
 - **Log Replication**: All state replicated across nodes before acknowledgment
 - **Autoscaling Support**: Handles horizontal scaling without disruption
 - **DNS-based Discovery**: Automatic peer discovery via headless service
+- **Persistent Storage**: Optional RocksDB backend for durable state (ha-persist feature)
 
 ### Usage
 
@@ -301,6 +309,36 @@ async fn main() -> Result<()> {
         .run()
         .await
 }
+```
+
+### Persistent Storage (RocksDB)
+
+With the `ha-persist` feature, Raft logs and state machine data are persisted to disk using RocksDB:
+
+```rust
+use k8s_operator::{RaftConfig, RaftNodeManager};
+
+// Create a Raft node with persistent storage
+let node_manager = RaftNodeManager::new_with_rocksdb(
+    RaftConfig::new("my-cluster")
+        .node_id(node_id)
+        .service_name("my-operator-headless")
+        .namespace("default"),
+    "/data/raft"  // Data directory for RocksDB
+).await?;
+```
+
+For persistent storage, mount a PersistentVolume to `/data/raft`:
+
+```yaml
+volumeClaimTemplates:
+  - metadata:
+      name: raft-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 1Gi
 ```
 
 ### How It Works
