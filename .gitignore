@@ -1,5 +1,7 @@
 /target
 /vendor
+/.cargo
+/.idea
 Cargo.lock
 *.swp
 *.swo
