@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 description = "Core traits and types for k8s-operator framework"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/alexchoi0/k8s-operator"
+keywords = ["kubernetes", "operator", "raft"]
+categories = ["development-tools"]
 
 [dependencies]
 async-trait = { workspace = true }

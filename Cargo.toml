@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "A highly-available Kubernetes operator framework using Raft consensus"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/yourusername/k8s-operator"
+repository = "https://github.com/alexchoi0/k8s-operator"
 keywords = ["kubernetes", "operator", "raft", "ha", "distributed"]
 categories = ["development-tools", "asynchronous"]
 
@@ -19,11 +19,11 @@ members = [
 ]
 
 [dependencies]
-k8s-operator-core = { path = "crates/k8s-operator-core" }
-k8s-operator-raft = { path = "crates/k8s-operator-raft" }
-k8s-operator-storage = { path = "crates/k8s-operator-storage" }
-k8s-operator-controller = { path = "crates/k8s-operator-controller" }
-k8s-operator-derive = { path = "crates/k8s-operator-derive" }
+k8s-operator-core = { path = "crates/k8s-operator-core", version = "0.1.0" }
+k8s-operator-raft = { path = "crates/k8s-operator-raft", version = "0.1.0" }
+k8s-operator-storage = { path = "crates/k8s-operator-storage", version = "0.1.0" }
+k8s-operator-controller = { path = "crates/k8s-operator-controller", version = "0.1.0" }
+k8s-operator-derive = { path = "crates/k8s-operator-derive", version = "0.1.0" }
 
 [workspace.dependencies]
 openraft = "0.10"

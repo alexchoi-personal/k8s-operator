@@ -4,13 +4,16 @@ version = "0.1.0"
 edition = "2021"
 description = "Storage backends for k8s-operator framework"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/alexchoi0/k8s-operator"
+keywords = ["kubernetes", "operator", "storage", "rocksdb"]
+categories = ["development-tools"]
 
 [features]
 default = ["rocksdb"]
 rocksdb = ["dep:rocksdb"]
 
 [dependencies]
-k8s-operator-core = { path = "../k8s-operator-core" }
+k8s-operator-core = { path = "../k8s-operator-core", version = "0.1.0" }
 openraft = { workspace = true }
 rocksdb = { workspace = true, optional = true }
 async-trait = { workspace = true }
