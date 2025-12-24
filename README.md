@@ -1,173 +1,317 @@
 # k8s-operator
 
-A batteries-included Kubernetes operator framework with Raft consensus for high availability.
+A batteries-included Kubernetes operator framework for Rust. Write operators with minimal boilerplate while hiding the complexity of `kube-rs` and `k8s-openapi`.
 
 [![Crates.io](https://img.shields.io/crates/v/k8s-operator.svg)](https://crates.io/crates/k8s-operator)
 [![License](https://img.shields.io/crates/l/k8s-operator.svg)](LICENSE)
 
-## Overview
-
-`k8s-operator` is a Rust library for building Kubernetes operators that run as highly-available clusters. It uses [Raft consensus](https://raft.github.io/) via [openraft](https://github.com/databendlabs/openraft) to ensure only one replica performs reconciliation at a time, with automatic leader election and failover.
-
 ## Features
 
-- **Batteries Included**: All dependencies re-exported - just add `k8s-operator`
-- **High Availability**: Run multiple operator replicas with automatic leader election
-- **Raft Consensus**: Built on openraft for distributed consensus
-- **Kubernetes Native**: Uses kube-rs for Kubernetes API interactions
-- **Headless Service Discovery**: Automatic peer discovery via Kubernetes DNS
-- **Controller Runtime**: Finalizers, event recording, and status management
+- **Zero k8s-openapi exposure** - Create Deployments, Services, ConfigMaps, etc. with typed builders
+- **Simple reconciliation** - Just implement an async function
+- **Automatic finalizers** - Optional finalizer management with cleanup hooks
+- **HA/Raft support** - Optional leader election for high availability (feature flag)
+- **Type-safe** - Full Rust type safety for Kubernetes resources
 
 ## Installation
 
 ```toml
 [dependencies]
-k8s-operator = "0.2"
+k8s-operator = "0.3"
+tokio = { version = "1", features = ["full"] }
 ```
 
-That's it! No need to add `kube`, `k8s-openapi`, `schemars`, `tokio`, `serde`, etc. - everything is re-exported.
+For HA/leader election support:
 
-## Crate Structure
-
-| Crate | Description |
-|-------|-------------|
-| `k8s-operator` | Unified API re-exporting all subcrates |
-| `k8s-operator-core` | Core traits and types (`Reconciler`, `ReconcileResult`, etc.) |
-| `k8s-operator-raft` | Raft configuration and peer discovery |
-| `k8s-operator-storage` | Storage layer (memory-backed via openraft-memstore) |
-| `k8s-operator-controller` | Controller components (finalizers, events, status, leader guard) |
-| `k8s-operator-derive` | Procedural macros for CRD definitions |
+```toml
+[dependencies]
+k8s-operator = { version = "0.3", features = ["ha"] }
+```
 
 ## Quick Start
 
 ```rust
-use k8s_operator::*;
-use kube::CustomResource;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use k8s_operator::prelude::*;
 
-#[derive(CustomResource, Clone, Debug, Deserialize, Serialize, JsonSchema)]
-#[kube(group = "example.com", version = "v1", kind = "MyResource", namespaced)]
-pub struct MyResourceSpec {
-    pub replicas: i32,
+#[derive(CustomResource, Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[kube(group = "example.com", version = "v1", kind = "WebApp", namespaced)]
+pub struct WebAppSpec {
+    pub image: String,
+    pub replicas: u32,
 }
 
-struct MyReconciler;
+async fn reconcile(ctx: Context<WebApp>) -> Result<Action> {
+    let app = ctx.resource();
 
-#[async_trait::async_trait]
-impl Reconciler<MyResource> for MyReconciler {
-    async fn reconcile(&self, resource: Arc<MyResource>) -> ReconcileResult {
-        println!("Reconciling: {:?}", resource.metadata.name);
-        Ok(Action::requeue(std::time::Duration::from_secs(300)))
-    }
+    ctx.apply(
+        Deployment::new(ctx.name())
+            .replicas(app.spec.replicas)
+            .container(
+                Container::new("app")
+                    .image(&app.spec.image)
+                    .port(80)
+            )
+    ).await?;
 
-    async fn on_error(&self, _resource: Arc<MyResource>, error: &ReconcileError) -> Action {
-        eprintln!("Error: {:?}", error);
-        Action::requeue(std::time::Duration::from_secs(60))
-    }
-}
-```
+    ctx.apply(
+        Service::new(ctx.name())
+            .port(80, 80)
+            .selector(Selector::new().insert("app", ctx.name()))
+    ).await?;
 
-## Leader Election
-
-Only the leader replica performs reconciliation:
-
-```rust
-use k8s_operator::{LeaderElection, LeaderGuard, NodeRole};
-
-let election = LeaderElection::new();
-let guard = election.guard();
-
-// Set role based on Raft state
-election.set_role(NodeRole::Leader);
-
-// Check if this node is the leader
-if guard.is_leader() {
-    // Perform reconciliation
+    Ok(Action::requeue(Duration::from_secs(300)))
 }
 
-// Or use the guard to gate operations
-guard.check()?; // Returns Err(ReconcileError::NotLeader) if not leader
-```
-
-## Peer Discovery
-
-Discover peers via Kubernetes headless service DNS:
-
-```rust
-use k8s_operator::HeadlessServiceDiscovery;
-
-let discovery = HeadlessServiceDiscovery::new(
-    "my-operator-headless",
-    "default",
-    5000,
-);
-
-// Get DNS name for the service
-let dns = discovery.dns_name();
-// => "my-operator-headless.default.svc.cluster.local"
-
-// Discover peers by StatefulSet ordinal
-let peers = discovery.discover_by_ordinal(3);
-// => HashMap with nodes 0, 1, 2
-```
-
-## Finalizers
-
-Manage Kubernetes finalizers for cleanup:
-
-```rust
-use k8s_operator::{add_finalizer, remove_finalizer, has_finalizer};
-use kube::Client;
-
-const FINALIZER: &str = "example.com/cleanup";
-
-// Add finalizer before creating resources
-add_finalizer(&client, &resource, FINALIZER).await?;
-
-// Check if finalizer exists
-if has_finalizer(&resource, FINALIZER) {
-    // Perform cleanup
-    remove_finalizer(&client, &resource, FINALIZER).await?;
+#[tokio::main]
+async fn main() -> Result<()> {
+    Operator::<WebApp>::new()
+        .reconcile(reconcile)
+        .with_finalizer()
+        .run()
+        .await
 }
 ```
 
-## Status Updates
+## Core Concepts
 
-Update resource status with conditions:
+### Operator
+
+The `Operator` builder configures and runs your controller:
 
 ```rust
-use k8s_operator::{StatusPatch, StatusCondition, ConditionStatus};
+Operator::<MyResource>::new()
+    .reconcile(reconcile_fn)       // Required: reconciliation function
+    .on_delete(cleanup_fn)         // Optional: cleanup on deletion
+    .with_finalizer()              // Optional: auto-manage finalizer
+    .requeue_after(Duration::from_secs(300))  // Default requeue interval
+    .error_requeue(Duration::from_secs(60))   // Requeue on error
+    .run()
+    .await
+```
 
-StatusPatch::new()
-    .set("replicas", 3)
-    .set("ready", true)
-    .condition(
-        StatusCondition::ready(true)
-            .with_reason("AllReplicasReady")
-            .with_message("All replicas are running")
+### Context
+
+The `Context<R>` provides access to the resource and Kubernetes operations:
+
+```rust
+async fn reconcile(ctx: Context<MyResource>) -> Result<Action> {
+    // Access the resource
+    let resource = ctx.resource();
+    let name = ctx.name();
+    let namespace = ctx.namespace();
+
+    // Apply child resources (creates or updates)
+    ctx.apply(Deployment::new("my-deploy")).await?;
+
+    // Delete child resources
+    ctx.delete::<Deployment>("old-deploy").await?;
+
+    // Get existing resources
+    let deploy: Option<Deployment> = ctx.get("my-deploy").await?;
+
+    // Set status
+    ctx.set_status(MyStatus { ready: true }).await?;
+
+    // Emit events
+    ctx.event("Reconciled", "Successfully reconciled resource").await?;
+    ctx.warning("Issue", "Something needs attention").await?;
+
+    Ok(Action::requeue(Duration::from_secs(300)))
+}
+```
+
+### Resource Builders
+
+Create Kubernetes resources with typed builders:
+
+#### Deployment
+
+```rust
+Deployment::new("my-app")
+    .replicas(3)
+    .labels(Labels::new().insert("app", "my-app"))
+    .container(
+        Container::new("main")
+            .image("nginx:1.25")
+            .port(80)
+            .env("LOG_LEVEL", "info")
+            .env_from_secret("DB_PASSWORD", "my-secret", "password")
+            .env_from_configmap("CONFIG", "my-config", "key")
+            .resources(Resources::new()
+                .cpu_request("100m")
+                .cpu_limit("500m")
+                .memory_request("128Mi")
+                .memory_limit("512Mi"))
+            .liveness_probe(Probe::http("/health", 8080).period(10))
+            .readiness_probe(Probe::http("/ready", 8080).initial_delay(5))
+            .volume_mount("data", "/data")
+            .security_context(SecurityContext::new()
+                .read_only_root_filesystem(true)
+                .run_as_non_root(true))
     )
-    .apply(&client, &resource)
-    .await?;
+    .volume(Volume::pvc("data", "my-pvc"))
+    .service_account("my-sa")
 ```
 
-## Event Recording
-
-Record Kubernetes events:
+#### Service
 
 ```rust
-use k8s_operator::EventRecorder;
-
-let recorder = EventRecorder::new(client.clone(), "my-operator");
-
-recorder.normal(&resource, "Created", "Resource created successfully").await?;
-recorder.warning(&resource, "ScaleDown", "Scaling down replicas").await?;
+Service::new("my-service")
+    .port(80, 8080)                    // port, targetPort
+    .named_port("metrics", 9090, 9090)
+    .selector(Selector::new().insert("app", "my-app"))
+    .cluster_ip()                      // default
+    .node_port(80, 8080, 30080)        // with nodePort
+    .load_balancer()                   // type: LoadBalancer
+    .headless()                        // clusterIP: None
 ```
 
-## Kubernetes Deployment
+#### ConfigMap & Secret
 
-Deploy as a StatefulSet with a headless service for peer discovery:
+```rust
+ConfigMap::new("my-config")
+    .data("config.yaml", "key: value")
+    .data("settings.json", "{}")
+
+Secret::new("my-secret")
+    .data("password", "secret123")     // auto base64 encoded
+    .data("api-key", "abc123")
+```
+
+#### Ingress
+
+```rust
+Ingress::new("my-ingress")
+    .ingress_class("nginx")
+    .annotation("nginx.ingress.kubernetes.io/rewrite-target", "/")
+    .rule(
+        IngressRule::new()
+            .host("example.com")
+            .path("/api", "api-service", 80)
+            .path("/", "web-service", 80)
+    )
+    .tls(vec!["example.com"], "tls-secret")
+```
+
+#### StatefulSet
+
+```rust
+StatefulSet::new("my-stateful")
+    .replicas(3)
+    .service_name("my-headless")
+    .container(Container::new("app").image("redis:7"))
+    .volume_claim_template(
+        PersistentVolumeClaim::new("data")
+            .storage("10Gi")
+            .access_mode("ReadWriteOnce")
+    )
+```
+
+#### RBAC
+
+```rust
+ServiceAccount::new("my-sa")
+
+Role::new("my-role")
+    .rule(PolicyRule::new()
+        .api_groups(vec![""])
+        .resources(vec!["pods", "services"])
+        .verbs(vec!["get", "list", "watch"]))
+
+RoleBinding::new("my-binding")
+    .role("my-role")
+    .service_account("my-sa", "default")
+
+ClusterRole::new("my-cluster-role")
+    .rule(PolicyRule::new()
+        .api_groups(vec!["example.com"])
+        .resources(vec!["myresources"])
+        .verbs(vec!["*"]))
+
+ClusterRoleBinding::new("my-cluster-binding")
+    .cluster_role("my-cluster-role")
+    .service_account("my-sa", "default")
+```
+
+#### Other Resources
+
+```rust
+// Jobs
+Job::new("my-job")
+    .backoff_limit(3)
+    .container(Container::new("job").image("busybox").command(vec!["echo", "hello"]))
+
+// CronJobs
+CronJob::new("my-cronjob")
+    .schedule("0 * * * *")
+    .container(Container::new("cron").image("busybox"))
+
+// DaemonSets
+DaemonSet::new("my-daemon")
+    .container(Container::new("agent").image("datadog/agent"))
+
+// NetworkPolicies
+NetworkPolicy::new("my-policy")
+    .pod_selector(Selector::new().insert("app", "my-app"))
+    .allow_ingress(
+        NetworkPolicyIngress::new()
+            .from_namespace_selector(Selector::new().insert("env", "prod"))
+            .tcp_port(80)
+    )
+    .deny_all_egress()
+```
+
+## High Availability (HA)
+
+Enable the `ha` feature for Raft-based leader election with replicated logs:
+
+```toml
+[dependencies]
+k8s-operator = { version = "0.3", features = ["ha"] }
+```
+
+### Features
+
+- **Raft Consensus**: Full Raft implementation using [openraft](https://github.com/datafuselabs/openraft)
+- **gRPC Transport**: Inter-node communication via gRPC (tonic) on port 8080
+- **Automatic Leader Election**: ~500ms failover when leader dies
+- **Log Replication**: All state replicated across nodes before acknowledgment
+- **Autoscaling Support**: Handles horizontal scaling without disruption
+- **DNS-based Discovery**: Automatic peer discovery via headless service
+
+### Usage
+
+```rust
+use k8s_operator::prelude::*;
+use k8s_operator::{RaftConfig, RaftNodeManager};
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Automatically parse node ID from StatefulSet pod name (e.g., "my-operator-0" -> 0)
+    let node_id = RaftNodeManager::node_id_from_hostname()?;
+
+    Operator::<MyResource>::new()
+        .reconcile(reconcile)
+        .with_leader_election(
+            RaftConfig::new("my-cluster")
+                .node_id(node_id)
+                .service_name("my-operator-headless")
+                .namespace("default")
+        )
+        .run()
+        .await
+}
+```
+
+### How It Works
+
+1. **Bootstrap**: The first node (node-0) bootstraps a new Raft cluster
+2. **Join**: Additional nodes join as learners, then become voters
+3. **Leader Election**: Raft elects a leader; only the leader runs reconciliation
+4. **Failover**: If leader dies, remaining nodes elect a new leader (~500ms)
+5. **Scaling**: `ClusterManager` watches DNS for pod changes and updates membership
+
+### Kubernetes Deployment
 
 ```yaml
 apiVersion: v1
@@ -179,7 +323,7 @@ spec:
   selector:
     app: my-operator
   ports:
-    - port: 5000
+    - port: 8080
       name: raft
 ---
 apiVersion: apps/v1
@@ -201,24 +345,69 @@ spec:
         - name: operator
           image: my-operator:latest
           ports:
-            - containerPort: 5000
+            - containerPort: 8080
               name: raft
           env:
             - name: POD_NAME
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
-            - name: NAMESPACE
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
 ```
 
+### Autoscaling Behavior
+
+| Operation | Behavior |
+|-----------|----------|
+| Scale up | New pods discovered via DNS, added as learners, then voters |
+| Scale down | Removed pods detected, membership updated, logs redistributed |
+| Pod restart | Same node ID rejoins, catches up from leader's log |
+| Leader dies | New election in ~500ms, reconciliation continues |
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│                 Operator Pod                    │
+│  ┌──────────────┐    ┌──────────────────────┐  │
+│  │  Reconciler  │    │   RaftNodeManager    │  │
+│  │              │    │  ┌────────────────┐  │  │
+│  │ if is_leader │◄───│  │   Raft Node    │  │  │
+│  │   reconcile  │    │  └───────┬────────┘  │  │
+│  └──────────────┘    │          │           │  │
+│                      │  ┌───────▼────────┐  │  │
+│                      │  │  gRPC Server   │  │  │
+│                      │  │    :8080       │  │  │
+│                      │  └───────┬────────┘  │  │
+│                      └──────────┼───────────┘  │
+└─────────────────────────────────┼──────────────┘
+                                  │ gRPC
+              ┌───────────────────┼───────────────────┐
+              │                   │                   │
+     ┌────────▼────────┐ ┌────────▼────────┐ ┌────────▼────────┐
+     │    Pod 0        │ │    Pod 1        │ │    Pod 2        │
+     │   (leader)      │ │   (follower)    │ │   (follower)    │
+     └─────────────────┘ └─────────────────┘ └─────────────────┘
+```
+
+## Available Types
+
+| Category | Types |
+|----------|-------|
+| **Workloads** | `Deployment`, `StatefulSet`, `DaemonSet`, `Job`, `CronJob`, `Pod` |
+| **Config** | `ConfigMap`, `Secret` |
+| **Networking** | `Service`, `Ingress`, `NetworkPolicy` |
+| **Storage** | `PersistentVolumeClaim`, `Volume` |
+| **RBAC** | `ServiceAccount`, `Role`, `RoleBinding`, `ClusterRole`, `ClusterRoleBinding` |
+| **Helpers** | `Container`, `Labels`, `Annotations`, `Selector`, `Probe`, `Resources`, `SecurityContext` |
+
 ## License
 
-Licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-at your option.
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option.

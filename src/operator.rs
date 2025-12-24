@@ -13,7 +13,7 @@ use std::time::Duration;
 use tracing::{error, info};
 
 #[cfg(feature = "ha")]
-use crate::raft::{LeaderElection, RaftConfig};
+use crate::raft::{ClusterManager, HeadlessServiceDiscovery, LeaderElection, RaftConfig, RaftNodeManager};
 
 pub type ReconcileFn<R> =
     Box<dyn Fn(Context<R>) -> Pin<Box<dyn Future<Output = Result<Action>> + Send>> + Send + Sync>;
@@ -127,10 +127,39 @@ where
         let error_requeue = self.error_requeue;
 
         #[cfg(feature = "ha")]
-        let leader_election = self.raft_config.map(|config| {
-            info!("Leader election enabled for node {}", config.node_id);
-            Arc::new(LeaderElection::new(config.node_id))
-        });
+        let leader_election = if let Some(config) = self.raft_config {
+            info!("Initializing Raft cluster for node {}", config.node_id);
+
+            let node_manager = RaftNodeManager::new(config.clone())
+                .await
+                .map_err(|e| Error::Other(format!("Failed to create Raft node: {:?}", e)))?;
+
+            node_manager
+                .start_grpc_server(8080)
+                .await
+                .map_err(|e| Error::Other(format!("Failed to start gRPC server: {:?}", e)))?;
+
+            node_manager
+                .bootstrap_or_join()
+                .await
+                .map_err(|e| Error::Other(format!("Failed to bootstrap Raft: {:?}", e)))?;
+
+            node_manager.start_leadership_watcher();
+
+            let node_manager = Arc::new(node_manager);
+
+            let discovery = HeadlessServiceDiscovery::new(
+                &config.service_name,
+                &config.namespace,
+                8080,
+            );
+            let cluster_manager = Arc::new(ClusterManager::new(node_manager.clone(), discovery));
+            cluster_manager.start_membership_watcher();
+
+            Some(node_manager.leader_election().clone())
+        } else {
+            None
+        };
 
         let controller_ctx = ControllerContext {
             client: client.clone(),

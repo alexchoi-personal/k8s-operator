@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 pub type NodeId = u64;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default)]
-pub struct RaftTypeConfig;
+pub struct TypeConfig;
+
+pub type RaftTypeConfig = TypeConfig;
 
 impl openraft::RaftTypeConfig for RaftTypeConfig {
     type D = RaftRequest;
@@ -40,6 +42,7 @@ impl std::fmt::Display for RaftNode {
     }
 }
 
+#[allow(dead_code)]
 pub fn default_raft_config() -> Config {
     Config {
         election_timeout_min: 500,
