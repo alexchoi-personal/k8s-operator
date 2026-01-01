@@ -1,36 +1,55 @@
 use std::collections::BTreeMap;
+use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use openraft::storage::Adaptor;
 use openraft::{Config, Raft, ServerState};
-use tokio::sync::watch;
 
 use crate::error::{Error, Result};
+use crate::raft::cert_reload::CertReloader;
+use crate::raft::compaction::CompactionManager;
 use crate::raft::config::RaftConfig;
 use crate::raft::leader::LeaderElection;
-use crate::raft::network::{start_raft_server, GrpcNetworkFactory};
+use crate::raft::network::{start_raft_server_with_health, GrpcNetworkFactory};
+use crate::raft::shutdown::GracefulShutdown;
 use crate::raft::storage::MemStore;
 #[cfg(feature = "rocksdb")]
 use crate::raft::storage::RocksDbStore;
-use crate::raft::types::{RaftNode, TypeConfig};
+use crate::raft::types::{KeyValueStateMachine, RaftNode, StateMachine, TypeConfig};
 
-pub enum StorageBackend {
-    Memory(Arc<MemStore>),
+#[derive(Clone)]
+pub enum StorageBackend<SM: StateMachine = KeyValueStateMachine> {
+    Memory(Arc<MemStore<SM>>),
     #[cfg(feature = "rocksdb")]
-    RocksDb(Arc<RocksDbStore>),
+    RocksDb(Arc<RocksDbStore<SM>>),
 }
 
-pub struct RaftNodeManager {
+pub struct RaftNodeManager<SM: StateMachine = KeyValueStateMachine> {
     config: RaftConfig,
-    raft: Arc<Raft<TypeConfig>>,
+    raft: Arc<Raft<TypeConfig<SM>>>,
     leader_election: Arc<LeaderElection>,
-    storage: StorageBackend,
-    shutdown_tx: watch::Sender<bool>,
+    storage: StorageBackend<SM>,
+    graceful_shutdown: GracefulShutdown,
+    _marker: PhantomData<SM>,
 }
 
-impl RaftNodeManager {
+impl RaftNodeManager<KeyValueStateMachine> {
     pub async fn new(config: RaftConfig) -> Result<Self> {
+        Self::new_with_state_machine(config, KeyValueStateMachine::default()).await
+    }
+
+    #[cfg(feature = "rocksdb")]
+    pub async fn new_with_rocksdb<P: AsRef<std::path::Path>>(
+        config: RaftConfig,
+        data_dir: P,
+    ) -> Result<Self> {
+        Self::new_with_rocksdb_state_machine(config, data_dir, KeyValueStateMachine::default()).await
+    }
+}
+
+impl<SM: StateMachine> RaftNodeManager<SM> {
+    pub async fn new_with_state_machine(config: RaftConfig, _machine: SM) -> Result<Self> {
         let raft_config = Arc::new(Config {
             cluster_name: config.cluster_name.clone(),
             election_timeout_min: config.election_timeout.as_millis() as u64,
@@ -39,9 +58,9 @@ impl RaftNodeManager {
             ..Default::default()
         });
 
-        let store = Arc::new(MemStore::new());
+        let store = Arc::new(MemStore::<SM>::new());
         let (log_storage, state_machine) = Adaptor::new(store.clone());
-        let network = GrpcNetworkFactory::with_tls(config.tls.clone());
+        let network = GrpcNetworkFactory::<SM>::with_tls(config.tls.clone());
 
         let raft = Raft::new(
             config.node_id,
@@ -55,21 +74,23 @@ impl RaftNodeManager {
 
         let raft = Arc::new(raft);
         let leader_election = Arc::new(LeaderElection::new(config.node_id));
-        let (shutdown_tx, _) = watch::channel(false);
+        let graceful_shutdown = GracefulShutdown::new(config.drain_timeout);
 
         Ok(Self {
             config,
             raft,
             leader_election,
             storage: StorageBackend::Memory(store),
-            shutdown_tx,
+            graceful_shutdown,
+            _marker: PhantomData,
         })
     }
 
     #[cfg(feature = "rocksdb")]
-    pub async fn new_with_rocksdb<P: AsRef<std::path::Path>>(
+    pub async fn new_with_rocksdb_state_machine<P: AsRef<std::path::Path>>(
         config: RaftConfig,
         data_dir: P,
+        machine: SM,
     ) -> Result<Self> {
         let raft_config = Arc::new(Config {
             cluster_name: config.cluster_name.clone(),
@@ -80,11 +101,11 @@ impl RaftNodeManager {
         });
 
         let store = Arc::new(
-            RocksDbStore::new(data_dir)
+            RocksDbStore::with_state_machine(data_dir, machine)
                 .map_err(|e| Error::Other(format!("Failed to open RocksDB: {:?}", e)))?,
         );
         let (log_storage, state_machine) = Adaptor::new(store.clone());
-        let network = GrpcNetworkFactory::with_tls(config.tls.clone());
+        let network = GrpcNetworkFactory::<SM>::with_tls(config.tls.clone());
 
         let raft = Raft::new(
             config.node_id,
@@ -98,21 +119,22 @@ impl RaftNodeManager {
 
         let raft = Arc::new(raft);
         let leader_election = Arc::new(LeaderElection::new(config.node_id));
-        let (shutdown_tx, _) = watch::channel(false);
+        let graceful_shutdown = GracefulShutdown::new(config.drain_timeout);
 
         Ok(Self {
             config,
             raft,
             leader_election,
             storage: StorageBackend::RocksDb(store),
-            shutdown_tx,
+            graceful_shutdown,
+            _marker: PhantomData,
         })
     }
 
     pub fn start_leadership_watcher(&self) {
         let raft = self.raft.clone();
         let leader_election = self.leader_election.clone();
-        let mut shutdown_rx = self.shutdown_tx.subscribe();
+        let mut shutdown_rx = self.graceful_shutdown.subscribe();
 
         tokio::spawn(async move {
             let mut metrics_rx = raft.metrics();
@@ -143,14 +165,24 @@ impl RaftNodeManager {
         });
     }
 
+    pub fn start_signal_handler(&self) {
+        self.graceful_shutdown.start_signal_handler();
+    }
+
     pub async fn start_grpc_server(&self, port: u16) -> Result<()> {
         let addr: SocketAddr = format!("0.0.0.0:{}", port)
             .parse()
             .map_err(|e| Error::Other(format!("Invalid address: {}", e)))?;
 
         let raft = self.raft.clone();
+        let leader_election = self.leader_election.clone();
+        let node_id = self.config.node_id;
+        let tls = self.config.tls.clone();
+
         tokio::spawn(async move {
-            if let Err(e) = start_raft_server(raft, addr).await {
+            if let Err(e) =
+                start_raft_server_with_health::<SM>(raft, leader_election, node_id, addr, tls).await
+            {
                 tracing::error!("Raft gRPC server error: {:?}", e);
             }
         });
@@ -170,7 +202,10 @@ impl RaftNodeManager {
             return Ok(());
         }
 
-        tracing::info!("Bootstrapping new cluster with node {}", self.config.node_id);
+        tracing::info!(
+            "Bootstrapping new cluster with node {}",
+            self.config.node_id
+        );
         self.bootstrap_cluster().await
     }
 
@@ -192,14 +227,15 @@ impl RaftNodeManager {
     }
 
     fn get_node_addr(&self) -> String {
-        let pod_name = std::env::var("POD_NAME").unwrap_or_else(|_| format!("pod-{}", self.config.node_id));
+        let pod_name = std::env::var("POD_NAME")
+            .unwrap_or_else(|_| format!("pod-{}", self.config.node_id));
         format!(
             "{}.{}.{}.svc.cluster.local:8080",
             pod_name, self.config.service_name, self.config.namespace
         )
     }
 
-    pub fn raft(&self) -> &Arc<Raft<TypeConfig>> {
+    pub fn raft(&self) -> &Arc<Raft<TypeConfig<SM>>> {
         &self.raft
     }
 
@@ -211,7 +247,7 @@ impl RaftNodeManager {
         &self.config
     }
 
-    pub fn mem_store(&self) -> Option<&Arc<MemStore>> {
+    pub fn mem_store(&self) -> Option<&Arc<MemStore<SM>>> {
         match &self.storage {
             StorageBackend::Memory(store) => Some(store),
             #[cfg(feature = "rocksdb")]
@@ -220,7 +256,7 @@ impl RaftNodeManager {
     }
 
     #[cfg(feature = "rocksdb")]
-    pub fn rocksdb_store(&self) -> Option<&Arc<RocksDbStore>> {
+    pub fn rocksdb_store(&self) -> Option<&Arc<RocksDbStore<SM>>> {
         match &self.storage {
             StorageBackend::RocksDb(store) => Some(store),
             _ => None,
@@ -274,14 +310,83 @@ impl RaftNodeManager {
     }
 
     pub async fn shutdown(&self) -> Result<()> {
-        let _ = self.shutdown_tx.send(true);
+        tracing::info!("Starting graceful shutdown sequence");
+
+        if self.leader_election.is_leader() {
+            tracing::info!("Node is leader, attempting to step down before shutdown");
+        }
+
+        self.graceful_shutdown
+            .coordinator()
+            .initiate_shutdown()
+            .await;
+
+        if let Err(e) = self.remove_self_from_cluster().await {
+            tracing::warn!("Failed to remove self from cluster: {:?}", e);
+        }
 
         self.raft
             .shutdown()
             .await
             .map_err(|e| Error::Other(format!("Shutdown error: {:?}", e)))?;
 
+        tracing::info!("Graceful shutdown complete");
         Ok(())
+    }
+
+    pub async fn remove_self_from_cluster(&self) -> Result<()> {
+        let metrics = self.raft.metrics().borrow().clone();
+        let is_voter = metrics
+            .membership_config
+            .membership()
+            .voter_ids()
+            .any(|id| id == self.config.node_id);
+
+        if is_voter {
+            tracing::info!(
+                "Removing self (node {}) from cluster",
+                self.config.node_id
+            );
+            self.remove_member(self.config.node_id).await?;
+        }
+        Ok(())
+    }
+
+    pub fn graceful_shutdown(&self) -> &GracefulShutdown {
+        &self.graceful_shutdown
+    }
+
+    pub fn start_compaction_manager(&self) {
+        let compaction_manager = Arc::new(CompactionManager::new(
+            self.raft.clone(),
+            self.storage.clone(),
+            self.config.compaction.clone(),
+        ));
+
+        let shutdown_rx = self.graceful_shutdown.subscribe();
+        tokio::spawn(async move {
+            compaction_manager.run(shutdown_rx).await;
+        });
+    }
+
+    pub fn start_cert_reloader(&self) {
+        if !self.config.tls.is_enabled() {
+            return;
+        }
+
+        let cert_reloader = Arc::new(CertReloader::new(
+            self.config.tls.clone(),
+            self.config.cert_reload_interval,
+        ));
+
+        let shutdown_rx = self.graceful_shutdown.subscribe();
+        tokio::spawn(async move {
+            cert_reloader.run(shutdown_rx).await;
+        });
+    }
+
+    pub fn storage(&self) -> &StorageBackend<SM> {
+        &self.storage
     }
 
     pub fn node_id_from_hostname() -> Result<u64> {

@@ -1,6 +1,40 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+#[derive(Clone, Debug)]
+pub struct CompactionConfig {
+    pub log_entries_threshold: u64,
+    pub time_threshold: Duration,
+    pub check_interval: Duration,
+}
+
+impl Default for CompactionConfig {
+    fn default() -> Self {
+        Self {
+            log_entries_threshold: 1000,
+            time_threshold: Duration::from_secs(3600),
+            check_interval: Duration::from_secs(60),
+        }
+    }
+}
+
+impl CompactionConfig {
+    pub fn log_entries_threshold(mut self, threshold: u64) -> Self {
+        self.log_entries_threshold = threshold;
+        self
+    }
+
+    pub fn time_threshold(mut self, threshold: Duration) -> Self {
+        self.time_threshold = threshold;
+        self
+    }
+
+    pub fn check_interval(mut self, interval: Duration) -> Self {
+        self.check_interval = interval;
+        self
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub enum TlsMode {
     #[default]
@@ -66,6 +100,9 @@ pub struct RaftConfig {
     pub heartbeat_interval: Duration,
     pub snapshot_threshold: u64,
     pub tls: TlsConfig,
+    pub drain_timeout: Duration,
+    pub compaction: CompactionConfig,
+    pub cert_reload_interval: Duration,
 }
 
 impl RaftConfig {
@@ -79,6 +116,9 @@ impl RaftConfig {
             heartbeat_interval: Duration::from_millis(100),
             snapshot_threshold: 1000,
             tls: TlsConfig::disabled(),
+            drain_timeout: Duration::from_secs(5),
+            compaction: CompactionConfig::default(),
+            cert_reload_interval: Duration::from_secs(30),
         }
     }
 
@@ -114,6 +154,21 @@ impl RaftConfig {
 
     pub fn tls(mut self, tls: TlsConfig) -> Self {
         self.tls = tls;
+        self
+    }
+
+    pub fn drain_timeout(mut self, timeout: Duration) -> Self {
+        self.drain_timeout = timeout;
+        self
+    }
+
+    pub fn compaction(mut self, config: CompactionConfig) -> Self {
+        self.compaction = config;
+        self
+    }
+
+    pub fn cert_reload_interval(mut self, interval: Duration) -> Self {
+        self.cert_reload_interval = interval;
         self
     }
 

@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
+use std::marker::PhantomData;
 use std::time::Duration;
 
 use openraft::error::{InstallSnapshotError, RPCError, RaftError, Unreachable};
@@ -14,7 +15,7 @@ use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 use super::proto::raft_service_client::RaftServiceClient;
 use super::proto::{self as pb};
 use crate::raft::config::TlsConfig;
-use crate::raft::types::{RaftNode, RaftRequest, TypeConfig};
+use crate::raft::types::{KeyValueStateMachine, RaftNode, RaftRequest, StateMachine, TypeConfig};
 
 #[derive(Debug)]
 struct ConnectionError(String);
@@ -27,22 +28,28 @@ impl fmt::Display for ConnectionError {
 
 impl std::error::Error for ConnectionError {}
 
-pub struct GrpcRaftClient {
+pub struct GrpcRaftClient<SM: StateMachine = KeyValueStateMachine> {
     #[allow(dead_code)]
     target_id: u64,
     addr: String,
     tls: TlsConfig,
     client: Option<RaftServiceClient<Channel>>,
+    _marker: PhantomData<SM>,
 }
 
-impl GrpcRaftClient {
+impl<SM: StateMachine> GrpcRaftClient<SM> {
     pub fn new(target_id: u64, node: &RaftNode, tls: TlsConfig) -> Self {
         Self {
             target_id,
             addr: node.addr.clone(),
             tls,
             client: None,
+            _marker: PhantomData,
         }
+    }
+
+    pub fn invalidate_connection(&mut self) {
+        self.client = None;
     }
 
     async fn get_client(&mut self) -> Result<&mut RaftServiceClient<Channel>, ConnectionError> {
@@ -128,7 +135,7 @@ fn log_id_from_proto(l: pb::LogId) -> LogId<u64> {
     LogId::new(openraft::LeaderId::new(l.term, 0), l.index)
 }
 
-fn entry_to_proto(entry: &Entry<TypeConfig>) -> pb::Entry {
+fn entry_to_proto(entry: &Entry<TypeConfig<KeyValueStateMachine>>) -> pb::Entry {
     let payload = match &entry.payload {
         EntryPayload::Blank => pb::EntryPayload {
             payload: Some(pb::entry_payload::Payload::Blank(pb::Empty {})),
@@ -171,7 +178,7 @@ fn entry_to_proto(entry: &Entry<TypeConfig>) -> pb::Entry {
 }
 
 #[allow(dead_code)]
-fn entry_from_proto(e: pb::Entry) -> Entry<TypeConfig> {
+fn entry_from_proto(e: pb::Entry) -> Entry<TypeConfig<KeyValueStateMachine>> {
     let log_id = e.log_id.map(log_id_from_proto).unwrap_or_default();
     let payload = match e.payload.and_then(|p| p.payload) {
         Some(pb::entry_payload::Payload::Blank(_)) => EntryPayload::Blank,
@@ -207,10 +214,10 @@ fn entry_from_proto(e: pb::Entry) -> Entry<TypeConfig> {
     Entry { log_id, payload }
 }
 
-impl RaftNetwork<TypeConfig> for GrpcRaftClient {
+impl RaftNetwork<TypeConfig<KeyValueStateMachine>> for GrpcRaftClient<KeyValueStateMachine> {
     async fn append_entries(
         &mut self,
-        rpc: AppendEntriesRequest<TypeConfig>,
+        rpc: AppendEntriesRequest<TypeConfig<KeyValueStateMachine>>,
         _option: RPCOption,
     ) -> Result<AppendEntriesResponse<u64>, RPCError<u64, RaftNode, RaftError<u64>>> {
         let client = self
@@ -272,7 +279,7 @@ impl RaftNetwork<TypeConfig> for GrpcRaftClient {
 
     async fn install_snapshot(
         &mut self,
-        rpc: InstallSnapshotRequest<TypeConfig>,
+        rpc: InstallSnapshotRequest<TypeConfig<KeyValueStateMachine>>,
         _option: RPCOption,
     ) -> Result<
         InstallSnapshotResponse<u64>,

@@ -10,6 +10,8 @@ use tonic::{Request, Response, Status};
 use super::proto::raft_service_server::{RaftService, RaftServiceServer};
 use super::proto::{self as pb};
 use crate::raft::config::TlsConfig;
+use crate::raft::health::{HealthService, HealthState};
+use crate::raft::leader::LeaderElection;
 use crate::raft::types::{RaftNode, RaftRequest, TypeConfig};
 
 pub struct RaftGrpcServer {
@@ -197,6 +199,105 @@ pub async fn start_raft_server_with_tls(
         .await?;
 
     Ok(())
+}
+
+pub async fn start_raft_server_with_health(
+    raft: Arc<Raft<TypeConfig>>,
+    leader_election: Arc<LeaderElection>,
+    node_id: u64,
+    addr: SocketAddr,
+    tls: TlsConfig,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let grpc_server = RaftGrpcServer::new(raft.clone());
+    let health_state = HealthState::new(raft, leader_election, node_id);
+    let health_service = HealthService::new(health_state);
+
+    tracing::info!(
+        "Starting Raft gRPC server with health endpoints on {} (TLS: {})",
+        addr,
+        tls.is_enabled()
+    );
+
+    let mut builder = tonic::transport::Server::builder()
+        .accept_http1(true);
+
+    if tls.is_enabled() {
+        let tls_config = build_server_tls_config(&tls).await?;
+        builder = builder.tls_config(tls_config)?;
+    }
+
+    let grpc_service = RaftServiceServer::new(grpc_server);
+
+    builder
+        .layer(HealthLayer::new(health_service))
+        .add_service(grpc_service)
+        .serve(addr)
+        .await?;
+
+    Ok(())
+}
+
+#[derive(Clone)]
+pub struct HealthLayer {
+    health_service: HealthService,
+}
+
+impl HealthLayer {
+    pub fn new(health_service: HealthService) -> Self {
+        Self { health_service }
+    }
+}
+
+impl<S> tower::Layer<S> for HealthLayer {
+    type Service = HealthMiddleware<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        HealthMiddleware {
+            inner,
+            health_service: self.health_service.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct HealthMiddleware<S> {
+    inner: S,
+    health_service: HealthService,
+}
+
+impl<S, B> tower::Service<http::Request<B>> for HealthMiddleware<S>
+where
+    S: tower::Service<http::Request<B>, Response = http::Response<tonic::body::BoxBody>>
+        + Clone
+        + Send
+        + 'static,
+    S::Future: Send,
+    B: http_body::Body + Send + 'static,
+{
+    type Response = http::Response<tonic::body::BoxBody>;
+    type Error = S::Error;
+    type Future = std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>,
+    >;
+
+    fn poll_ready(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, req: http::Request<B>) -> Self::Future {
+        let path = req.uri().path();
+
+        if matches!(path, "/health" | "/ready" | "/leader" | "/metrics") {
+            let mut health = self.health_service.clone();
+            Box::pin(async move { Ok(health.call(req).await.unwrap()) })
+        } else {
+            let future = self.inner.call(req);
+            Box::pin(async move { future.await })
+        }
+    }
 }
 
 async fn build_server_tls_config(

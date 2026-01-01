@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::io::Cursor;
 use std::ops::RangeBounds;
@@ -15,7 +14,8 @@ use rocksdb::{ColumnFamilyDescriptor, Options, DB};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
-use crate::raft::types::{RaftNode, RaftResponse, TypeConfig};
+use crate::raft::types::{KeyValueStateMachine, RaftNode, StateMachine, TypeConfig};
+use super::StateMachineData;
 
 const CF_META: &str = "meta";
 const CF_LOGS: &str = "logs";
@@ -27,19 +27,13 @@ const KEY_STATE_MACHINE: &[u8] = b"state_machine";
 const KEY_SNAPSHOT_META: &[u8] = b"snapshot_meta";
 const KEY_SNAPSHOT_DATA: &[u8] = b"snapshot_data";
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct StateMachineData {
-    pub last_applied_log: Option<LogId<u64>>,
-    pub last_membership: StoredMembership<u64, RaftNode>,
-    pub data: HashMap<String, String>,
-}
-
-pub struct RocksDbStore {
+pub struct RocksDbStore<SM: StateMachine = KeyValueStateMachine> {
     db: Arc<DB>,
-    state_machine_cache: RwLock<StateMachineData>,
+    state_machine_data_cache: RwLock<StateMachineData<SM>>,
+    machine: RwLock<SM>,
 }
 
-impl RocksDbStore {
+impl<SM: StateMachine> RocksDbStore<SM> {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, rocksdb::Error> {
         let mut opts = Options::default();
         opts.create_if_missing(true);
@@ -52,30 +46,64 @@ impl RocksDbStore {
         let db = DB::open_cf_descriptors(&opts, path, vec![cf_meta, cf_logs, cf_state])?;
         let db = Arc::new(db);
 
-        let state_machine = Self::load_state_machine(&db).unwrap_or_default();
+        let state_machine_data = Self::load_state_machine_data(&db).unwrap_or_default();
+        let mut machine = SM::default();
+        machine.restore(state_machine_data.snapshot.clone());
 
         Ok(Self {
             db,
-            state_machine_cache: RwLock::new(state_machine),
+            state_machine_data_cache: RwLock::new(state_machine_data),
+            machine: RwLock::new(machine),
         })
     }
 
-    fn load_state_machine(db: &DB) -> Option<StateMachineData> {
+    pub fn with_state_machine<P: AsRef<Path>>(path: P, machine: SM) -> Result<Self, rocksdb::Error> {
+        let mut opts = Options::default();
+        opts.create_if_missing(true);
+        opts.create_missing_column_families(true);
+
+        let cf_meta = ColumnFamilyDescriptor::new(CF_META, Options::default());
+        let cf_logs = ColumnFamilyDescriptor::new(CF_LOGS, Options::default());
+        let cf_state = ColumnFamilyDescriptor::new(CF_STATE, Options::default());
+
+        let db = DB::open_cf_descriptors(&opts, path, vec![cf_meta, cf_logs, cf_state])?;
+        let db = Arc::new(db);
+
+        let state_machine_data = Self::load_state_machine_data(&db).unwrap_or_default();
+
+        Ok(Self {
+            db,
+            state_machine_data_cache: RwLock::new(state_machine_data),
+            machine: RwLock::new(machine),
+        })
+    }
+
+    fn load_state_machine_data(db: &DB) -> Option<StateMachineData<SM>> {
         let cf = db.cf_handle(CF_STATE)?;
         let bytes = db.get_cf(cf, KEY_STATE_MACHINE).ok()??;
         serde_json::from_slice(&bytes).ok()
     }
 
-    pub async fn get(&self, key: &str) -> Option<String> {
-        self.state_machine_cache.read().await.data.get(key).cloned()
+    pub async fn snapshot(&self) -> SM::Snapshot {
+        self.state_machine_data_cache.read().await.snapshot.clone()
     }
 
-    pub async fn data(&self) -> StateMachineData {
-        self.state_machine_cache.read().await.clone()
+    pub async fn state_machine_data(&self) -> StateMachineData<SM> {
+        self.state_machine_data_cache.read().await.clone()
     }
 
     fn log_key(index: u64) -> [u8; 8] {
         index.to_be_bytes()
+    }
+}
+
+impl RocksDbStore<KeyValueStateMachine> {
+    pub async fn get(&self, key: &str) -> Option<String> {
+        self.machine.read().await.data.get(key).cloned()
+    }
+
+    pub async fn data(&self) -> std::collections::HashMap<String, String> {
+        self.machine.read().await.data.clone()
     }
 }
 
@@ -87,18 +115,21 @@ fn io_error<E: std::error::Error + Send + Sync + 'static>(
     StorageIOError::new(subject, verb, openraft::AnyError::new(&e)).into()
 }
 
-impl RaftLogReader<TypeConfig> for Arc<RocksDbStore> {
+impl<SM: StateMachine> RaftLogReader<TypeConfig<SM>> for Arc<RocksDbStore<SM>> {
     async fn try_get_log_entries<RB: RangeBounds<u64> + Clone + Debug + OptionalSend>(
         &mut self,
         range: RB,
-    ) -> Result<Vec<Entry<TypeConfig>>, StorageError<u64>> {
+    ) -> Result<Vec<Entry<TypeConfig<SM>>>, StorageError<u64>> {
         let cf = self
             .db
             .cf_handle(CF_LOGS)
-            .ok_or_else(|| io_error(ErrorSubject::Logs, ErrorVerb::Read, std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "logs column family not found",
-            )))?;
+            .ok_or_else(|| {
+                io_error(
+                    ErrorSubject::Logs,
+                    ErrorVerb::Read,
+                    std::io::Error::new(std::io::ErrorKind::NotFound, "logs column family not found"),
+                )
+            })?;
 
         let start = match range.start_bound() {
             std::ops::Bound::Included(&n) => n,
@@ -113,10 +144,10 @@ impl RaftLogReader<TypeConfig> for Arc<RocksDbStore> {
         };
 
         let mut entries = Vec::new();
-        let iter = self.db.iterator_cf(cf, rocksdb::IteratorMode::From(
-            &RocksDbStore::log_key(start),
-            rocksdb::Direction::Forward,
-        ));
+        let iter = self.db.iterator_cf(
+            cf,
+            rocksdb::IteratorMode::From(&RocksDbStore::<SM>::log_key(start), rocksdb::Direction::Forward),
+        );
 
         for item in iter {
             let (key, value) = item.map_err(|e| io_error(ErrorSubject::Logs, ErrorVerb::Read, e))?;
@@ -133,7 +164,7 @@ impl RaftLogReader<TypeConfig> for Arc<RocksDbStore> {
                 }
             }
 
-            let entry: Entry<TypeConfig> = serde_json::from_slice(&value)
+            let entry: Entry<TypeConfig<SM>> = serde_json::from_slice(&value)
                 .map_err(|e| io_error(ErrorSubject::Logs, ErrorVerb::Read, e))?;
             entries.push(entry);
         }
@@ -142,16 +173,16 @@ impl RaftLogReader<TypeConfig> for Arc<RocksDbStore> {
     }
 }
 
-impl RaftSnapshotBuilder<TypeConfig> for Arc<RocksDbStore> {
-    async fn build_snapshot(&mut self) -> Result<Snapshot<TypeConfig>, StorageError<u64>> {
-        let state_machine = self.state_machine_cache.read().await.clone();
-        let data = serde_json::to_vec(&state_machine)
+impl<SM: StateMachine> RaftSnapshotBuilder<TypeConfig<SM>> for Arc<RocksDbStore<SM>> {
+    async fn build_snapshot(&mut self) -> Result<Snapshot<TypeConfig<SM>>, StorageError<u64>> {
+        let state_machine_data = self.state_machine_data_cache.read().await.clone();
+        let data = serde_json::to_vec(&state_machine_data)
             .map_err(|e| io_error(ErrorSubject::StateMachine, ErrorVerb::Read, e))?;
 
         let meta = SnapshotMeta {
-            last_log_id: state_machine.last_applied_log,
-            last_membership: state_machine.last_membership.clone(),
-            snapshot_id: format!("{:?}", state_machine.last_applied_log),
+            last_log_id: state_machine_data.last_applied_log,
+            last_membership: state_machine_data.last_membership.clone(),
+            snapshot_id: format!("{:?}", state_machine_data.last_applied_log),
         };
 
         Ok(Snapshot {
@@ -161,21 +192,21 @@ impl RaftSnapshotBuilder<TypeConfig> for Arc<RocksDbStore> {
     }
 }
 
-impl RaftStorage<TypeConfig> for Arc<RocksDbStore> {
+impl<SM: StateMachine> RaftStorage<TypeConfig<SM>> for Arc<RocksDbStore<SM>> {
     type LogReader = Self;
     type SnapshotBuilder = Self;
 
     async fn save_vote(&mut self, vote: &Vote<u64>) -> Result<(), StorageError<u64>> {
-        let cf = self
-            .db
-            .cf_handle(CF_META)
-            .ok_or_else(|| io_error(ErrorSubject::Vote, ErrorVerb::Write, std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "meta column family not found",
-            )))?;
+        let cf = self.db.cf_handle(CF_META).ok_or_else(|| {
+            io_error(
+                ErrorSubject::Vote,
+                ErrorVerb::Write,
+                std::io::Error::new(std::io::ErrorKind::NotFound, "meta column family not found"),
+            )
+        })?;
 
-        let bytes = serde_json::to_vec(vote)
-            .map_err(|e| io_error(ErrorSubject::Vote, ErrorVerb::Write, e))?;
+        let bytes =
+            serde_json::to_vec(vote).map_err(|e| io_error(ErrorSubject::Vote, ErrorVerb::Write, e))?;
 
         self.db
             .put_cf(cf, KEY_VOTE, &bytes)
@@ -189,13 +220,13 @@ impl RaftStorage<TypeConfig> for Arc<RocksDbStore> {
     }
 
     async fn read_vote(&mut self) -> Result<Option<Vote<u64>>, StorageError<u64>> {
-        let cf = self
-            .db
-            .cf_handle(CF_META)
-            .ok_or_else(|| io_error(ErrorSubject::Vote, ErrorVerb::Read, std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "meta column family not found",
-            )))?;
+        let cf = self.db.cf_handle(CF_META).ok_or_else(|| {
+            io_error(
+                ErrorSubject::Vote,
+                ErrorVerb::Read,
+                std::io::Error::new(std::io::ErrorKind::NotFound, "meta column family not found"),
+            )
+        })?;
 
         match self.db.get_cf(cf, KEY_VOTE) {
             Ok(Some(bytes)) => {
@@ -208,19 +239,21 @@ impl RaftStorage<TypeConfig> for Arc<RocksDbStore> {
         }
     }
 
-    async fn get_log_state(&mut self) -> Result<LogState<TypeConfig>, StorageError<u64>> {
+    async fn get_log_state(&mut self) -> Result<LogState<TypeConfig<SM>>, StorageError<u64>> {
         let cf_logs = self.db.cf_handle(CF_LOGS).ok_or_else(|| {
-            io_error(ErrorSubject::Logs, ErrorVerb::Read, std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "logs column family not found",
-            ))
+            io_error(
+                ErrorSubject::Logs,
+                ErrorVerb::Read,
+                std::io::Error::new(std::io::ErrorKind::NotFound, "logs column family not found"),
+            )
         })?;
 
         let cf_meta = self.db.cf_handle(CF_META).ok_or_else(|| {
-            io_error(ErrorSubject::Logs, ErrorVerb::Read, std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "meta column family not found",
-            ))
+            io_error(
+                ErrorSubject::Logs,
+                ErrorVerb::Read,
+                std::io::Error::new(std::io::ErrorKind::NotFound, "meta column family not found"),
+            )
         })?;
 
         let last_purged_log_id: Option<LogId<u64>> = self
@@ -234,7 +267,7 @@ impl RaftStorage<TypeConfig> for Arc<RocksDbStore> {
 
         for item in iter {
             if let Ok((_, value)) = item {
-                if let Ok(entry) = serde_json::from_slice::<Entry<TypeConfig>>(&value) {
+                if let Ok(entry) = serde_json::from_slice::<Entry<TypeConfig<SM>>>(&value) {
                     last_log_id = Some(entry.log_id);
                 }
             }
@@ -253,17 +286,18 @@ impl RaftStorage<TypeConfig> for Arc<RocksDbStore> {
 
     async fn append_to_log<I>(&mut self, entries: I) -> Result<(), StorageError<u64>>
     where
-        I: IntoIterator<Item = Entry<TypeConfig>> + OptionalSend,
+        I: IntoIterator<Item = Entry<TypeConfig<SM>>> + OptionalSend,
     {
         let cf = self.db.cf_handle(CF_LOGS).ok_or_else(|| {
-            io_error(ErrorSubject::Logs, ErrorVerb::Write, std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "logs column family not found",
-            ))
+            io_error(
+                ErrorSubject::Logs,
+                ErrorVerb::Write,
+                std::io::Error::new(std::io::ErrorKind::NotFound, "logs column family not found"),
+            )
         })?;
 
         for entry in entries {
-            let key = RocksDbStore::log_key(entry.log_id.index);
+            let key = RocksDbStore::<SM>::log_key(entry.log_id.index);
             let value = serde_json::to_vec(&entry)
                 .map_err(|e| io_error(ErrorSubject::Logs, ErrorVerb::Write, e))?;
 
@@ -281,14 +315,15 @@ impl RaftStorage<TypeConfig> for Arc<RocksDbStore> {
 
     async fn delete_conflict_logs_since(&mut self, log_id: LogId<u64>) -> Result<(), StorageError<u64>> {
         let cf = self.db.cf_handle(CF_LOGS).ok_or_else(|| {
-            io_error(ErrorSubject::Logs, ErrorVerb::Delete, std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "logs column family not found",
-            ))
+            io_error(
+                ErrorSubject::Logs,
+                ErrorVerb::Delete,
+                std::io::Error::new(std::io::ErrorKind::NotFound, "logs column family not found"),
+            )
         })?;
 
-        let start_key = RocksDbStore::log_key(log_id.index);
-        let end_key = RocksDbStore::log_key(u64::MAX);
+        let start_key = RocksDbStore::<SM>::log_key(log_id.index);
+        let end_key = RocksDbStore::<SM>::log_key(u64::MAX);
 
         self.db
             .delete_range_cf(cf, &start_key, &end_key)
@@ -303,17 +338,19 @@ impl RaftStorage<TypeConfig> for Arc<RocksDbStore> {
 
     async fn purge_logs_upto(&mut self, log_id: LogId<u64>) -> Result<(), StorageError<u64>> {
         let cf_logs = self.db.cf_handle(CF_LOGS).ok_or_else(|| {
-            io_error(ErrorSubject::Logs, ErrorVerb::Delete, std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "logs column family not found",
-            ))
+            io_error(
+                ErrorSubject::Logs,
+                ErrorVerb::Delete,
+                std::io::Error::new(std::io::ErrorKind::NotFound, "logs column family not found"),
+            )
         })?;
 
         let cf_meta = self.db.cf_handle(CF_META).ok_or_else(|| {
-            io_error(ErrorSubject::Logs, ErrorVerb::Write, std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "meta column family not found",
-            ))
+            io_error(
+                ErrorSubject::Logs,
+                ErrorVerb::Write,
+                std::io::Error::new(std::io::ErrorKind::NotFound, "meta column family not found"),
+            )
         })?;
 
         let last_purged_bytes = serde_json::to_vec(&log_id)
@@ -323,8 +360,8 @@ impl RaftStorage<TypeConfig> for Arc<RocksDbStore> {
             .put_cf(cf_meta, KEY_LAST_PURGED, &last_purged_bytes)
             .map_err(|e| io_error(ErrorSubject::Logs, ErrorVerb::Write, e))?;
 
-        let start_key = RocksDbStore::log_key(0);
-        let end_key = RocksDbStore::log_key(log_id.index + 1);
+        let start_key = RocksDbStore::<SM>::log_key(0);
+        let end_key = RocksDbStore::<SM>::log_key(log_id.index + 1);
 
         self.db
             .delete_range_cf(cf_logs, &start_key, &end_key)
@@ -340,49 +377,44 @@ impl RaftStorage<TypeConfig> for Arc<RocksDbStore> {
     async fn last_applied_state(
         &mut self,
     ) -> Result<(Option<LogId<u64>>, StoredMembership<u64, RaftNode>), StorageError<u64>> {
-        let sm = self.state_machine_cache.read().await;
+        let sm = self.state_machine_data_cache.read().await;
         Ok((sm.last_applied_log, sm.last_membership.clone()))
     }
 
     async fn apply_to_state_machine(
         &mut self,
-        entries: &[Entry<TypeConfig>],
-    ) -> Result<Vec<RaftResponse>, StorageError<u64>> {
+        entries: &[Entry<TypeConfig<SM>>],
+    ) -> Result<Vec<SM::Response>, StorageError<u64>> {
         let mut responses = Vec::new();
-        let mut sm = self.state_machine_cache.write().await;
+        let mut sm = self.state_machine_data_cache.write().await;
+        let mut machine = self.machine.write().await;
 
         for entry in entries {
             sm.last_applied_log = Some(entry.log_id);
 
             match &entry.payload {
                 EntryPayload::Blank => {
-                    responses.push(RaftResponse {
-                        success: true,
-                        value: None,
-                    });
+                    responses.push(SM::Response::default());
                 }
                 EntryPayload::Normal(req) => {
-                    let old_value = sm.data.insert(req.key.clone(), req.value.clone());
-                    responses.push(RaftResponse {
-                        success: true,
-                        value: old_value,
-                    });
+                    let response = machine.apply(req);
+                    responses.push(response);
                 }
                 EntryPayload::Membership(mem) => {
                     sm.last_membership = StoredMembership::new(Some(entry.log_id), mem.clone());
-                    responses.push(RaftResponse {
-                        success: true,
-                        value: None,
-                    });
+                    responses.push(SM::Response::default());
                 }
             }
         }
 
+        sm.snapshot = machine.snapshot();
+
         let cf = self.db.cf_handle(CF_STATE).ok_or_else(|| {
-            io_error(ErrorSubject::StateMachine, ErrorVerb::Write, std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "state column family not found",
-            ))
+            io_error(
+                ErrorSubject::StateMachine,
+                ErrorVerb::Write,
+                std::io::Error::new(std::io::ErrorKind::NotFound, "state column family not found"),
+            )
         })?;
 
         let sm_bytes = serde_json::to_vec(&*sm)
@@ -412,14 +444,15 @@ impl RaftStorage<TypeConfig> for Arc<RocksDbStore> {
         meta: &SnapshotMeta<u64, RaftNode>,
         snapshot: Box<Cursor<Vec<u8>>>,
     ) -> Result<(), StorageError<u64>> {
-        let data: StateMachineData = serde_json::from_slice(snapshot.get_ref())
+        let data: StateMachineData<SM> = serde_json::from_slice(snapshot.get_ref())
             .map_err(|e| io_error(ErrorSubject::StateMachine, ErrorVerb::Read, e))?;
 
         let cf = self.db.cf_handle(CF_STATE).ok_or_else(|| {
-            io_error(ErrorSubject::Snapshot(None), ErrorVerb::Write, std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "state column family not found",
-            ))
+            io_error(
+                ErrorSubject::Snapshot(None),
+                ErrorVerb::Write,
+                std::io::Error::new(std::io::ErrorKind::NotFound, "state column family not found"),
+            )
         })?;
 
         let meta_bytes = serde_json::to_vec(meta)
@@ -444,17 +477,21 @@ impl RaftStorage<TypeConfig> for Arc<RocksDbStore> {
             .flush()
             .map_err(|e| io_error(ErrorSubject::Snapshot(None), ErrorVerb::Write, e))?;
 
-        *self.state_machine_cache.write().await = data;
+        self.machine.write().await.restore(data.snapshot.clone());
+        *self.state_machine_data_cache.write().await = data;
 
         Ok(())
     }
 
-    async fn get_current_snapshot(&mut self) -> Result<Option<Snapshot<TypeConfig>>, StorageError<u64>> {
+    async fn get_current_snapshot(
+        &mut self,
+    ) -> Result<Option<Snapshot<TypeConfig<SM>>>, StorageError<u64>> {
         let cf = self.db.cf_handle(CF_STATE).ok_or_else(|| {
-            io_error(ErrorSubject::Snapshot(None), ErrorVerb::Read, std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "state column family not found",
-            ))
+            io_error(
+                ErrorSubject::Snapshot(None),
+                ErrorVerb::Read,
+                std::io::Error::new(std::io::ErrorKind::NotFound, "state column family not found"),
+            )
         })?;
 
         let meta_bytes = match self.db.get_cf(cf, KEY_SNAPSHOT_META) {
