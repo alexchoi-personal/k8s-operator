@@ -79,7 +79,9 @@ impl HealthService {
             r#"{{"node_id":{},"is_leader":{},"current_leader":{},"current_term":{},"state":"{}"}}"#,
             self.state.node_id,
             is_leader,
-            leader_id.map(|id| id.to_string()).unwrap_or_else(|| "null".to_string()),
+            leader_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "null".to_string()),
             current_term,
             state
         );
@@ -96,11 +98,7 @@ impl HealthService {
         let snapshot_index = metrics.snapshot.map(|s| s.index).unwrap_or(0);
         let current_term = metrics.current_term;
         let state = format!("{:?}", metrics.state);
-        let members = metrics
-            .membership_config
-            .membership()
-            .voter_ids()
-            .count();
+        let members = metrics.membership_config.membership().voter_ids().count();
 
         let body = format!(
             r#"{{"node_id":{},"last_log_index":{},"last_applied":{},"log_size":{},"snapshot_index":{},"current_term":{},"state":"{}","members":{}}}"#,
@@ -123,7 +121,9 @@ impl HealthService {
 }
 
 fn json_response(status: StatusCode, body: &str) -> Response<BoxBody> {
-    let body = tonic::body::boxed(http_body_util::Full::new(bytes::Bytes::from(body.to_string())));
+    let body = tonic::body::boxed(http_body_util::Full::new(bytes::Bytes::from(
+        body.to_string(),
+    )));
     Response::builder()
         .status(status)
         .header("content-type", "application/json")
@@ -137,7 +137,8 @@ where
 {
     type Response = Response<BoxBody>;
     type Error = Infallible;
-    type Future = Pin<Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+    type Future =
+        Pin<Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
@@ -162,4 +163,3 @@ where
         Box::pin(async move { Ok(response) })
     }
 }
-

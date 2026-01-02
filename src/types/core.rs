@@ -114,7 +114,12 @@ impl ChildResource for Pod {
                 init_containers: if self.init_containers.is_empty() {
                     None
                 } else {
-                    Some(self.init_containers.into_iter().map(|c| c.into_k8s()).collect())
+                    Some(
+                        self.init_containers
+                            .into_iter()
+                            .map(|c| c.into_k8s())
+                            .collect(),
+                    )
                 },
                 volumes: if self.volumes.is_empty() {
                     None
@@ -358,12 +363,7 @@ impl Service {
         self
     }
 
-    pub fn named_port(
-        mut self,
-        name: impl Into<String>,
-        port: i32,
-        target_port: i32,
-    ) -> Self {
+    pub fn named_port(mut self, name: impl Into<String>, port: i32, target_port: i32) -> Self {
         self.ports.push(ServicePort {
             port,
             target_port: Some(target_port),

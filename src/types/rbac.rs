@@ -147,7 +147,11 @@ impl RoleBinding {
         self
     }
 
-    pub fn service_account(mut self, name: impl Into<String>, namespace: impl Into<String>) -> Self {
+    pub fn service_account(
+        mut self,
+        name: impl Into<String>,
+        namespace: impl Into<String>,
+    ) -> Self {
         self.subjects.push(Subject {
             kind: "ServiceAccount".to_string(),
             name: name.into(),
@@ -235,7 +239,11 @@ impl ClusterRoleBinding {
         self
     }
 
-    pub fn service_account(mut self, name: impl Into<String>, namespace: impl Into<String>) -> Self {
+    pub fn service_account(
+        mut self,
+        name: impl Into<String>,
+        namespace: impl Into<String>,
+    ) -> Self {
         self.subjects.push(Subject {
             kind: "ServiceAccount".to_string(),
             name: name.into(),
@@ -336,11 +344,7 @@ impl PolicyRule {
     }
 
     pub fn read_only(mut self) -> Self {
-        self.verbs = vec![
-            "get".to_string(),
-            "list".to_string(),
-            "watch".to_string(),
-        ];
+        self.verbs = vec!["get".to_string(), "list".to_string(), "watch".to_string()];
         self
     }
 

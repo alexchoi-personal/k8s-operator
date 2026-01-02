@@ -19,7 +19,7 @@ pub struct RaftResponse {
     pub value: Option<String>,
 }
 
-pub trait StateMachine: Send + Sync + Default + 'static {
+pub trait StateMachine: Send + Sync + Default + Clone + Debug + 'static {
     type Request: Serialize + DeserializeOwned + Send + Sync + Clone + Debug + 'static;
     type Response: Serialize + DeserializeOwned + Send + Sync + Clone + Debug + Default + 'static;
     type Snapshot: Serialize + DeserializeOwned + Send + Sync + Clone + Default + 'static;
@@ -58,8 +58,47 @@ impl StateMachine for KeyValueStateMachine {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct TypeConfig<SM: StateMachine = KeyValueStateMachine>(PhantomData<SM>);
+
+impl<SM: StateMachine> Debug for TypeConfig<SM> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TypeConfig").finish()
+    }
+}
+
+impl<SM: StateMachine> Clone for TypeConfig<SM> {
+    fn clone(&self) -> Self {
+        TypeConfig(PhantomData)
+    }
+}
+
+impl<SM: StateMachine> Copy for TypeConfig<SM> {}
+
+impl<SM: StateMachine> PartialEq for TypeConfig<SM> {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl<SM: StateMachine> Eq for TypeConfig<SM> {}
+
+impl<SM: StateMachine> PartialOrd for TypeConfig<SM> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<SM: StateMachine> Ord for TypeConfig<SM> {
+    fn cmp(&self, _other: &Self) -> std::cmp::Ordering {
+        std::cmp::Ordering::Equal
+    }
+}
+
+impl<SM: StateMachine> Default for TypeConfig<SM> {
+    fn default() -> Self {
+        TypeConfig(PhantomData)
+    }
+}
 
 impl<SM: StateMachine> Serialize for TypeConfig<SM> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>

@@ -336,7 +336,8 @@ impl NetworkPolicyIngress {
     }
 
     pub fn from_namespace_selector(mut self, selector: Selector) -> Self {
-        self.from.push(NetworkPolicyPeer::NamespaceSelector(selector));
+        self.from
+            .push(NetworkPolicyPeer::NamespaceSelector(selector));
         self
     }
 

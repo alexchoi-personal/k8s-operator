@@ -13,9 +13,8 @@ pub use types::*;
 
 #[cfg(feature = "ha")]
 pub use raft::{
-    ClusterManager, HeadlessServiceDiscovery, LeaderElection, LeaderGuard,
-    MemLogStorage, MemStateMachine, MemStore, RaftConfig, RaftNodeManager,
-    TlsConfig, TlsMode,
+    ClusterManager, HeadlessServiceDiscovery, LeaderElection, LeaderGuard, MemLogStorage,
+    MemStateMachine, MemStore, RaftConfig, RaftNodeManager, TlsConfig, TlsMode,
 };
 
 #[cfg(feature = "rocksdb")]
@@ -27,12 +26,11 @@ pub mod prelude {
     pub use crate::operator::Operator;
 
     pub use crate::types::{
-        Annotations, ClusterRole, ClusterRoleBinding, ConfigMap, Container,
-        CronJob, DaemonSet, Deployment, Ingress, IngressRule, Job, Labels,
-        NetworkPolicy, NetworkPolicyEgress, NetworkPolicyIngress,
-        PersistentVolumeClaim, Pod, PolicyRule, Probe, Resources, Role,
-        RoleBinding, Secret, SecurityContext, Selector, Service,
-        ServiceAccount, StatefulSet, Volume,
+        Annotations, ClusterRole, ClusterRoleBinding, ConfigMap, Container, CronJob, DaemonSet,
+        Deployment, Ingress, IngressRule, Job, Labels, NetworkPolicy, NetworkPolicyEgress,
+        NetworkPolicyIngress, PersistentVolumeClaim, Pod, PolicyRule, Probe, Resources, Role,
+        RoleBinding, Secret, SecurityContext, Selector, Service, ServiceAccount, StatefulSet,
+        Volume,
     };
 
     pub use kube::runtime::controller::Action;

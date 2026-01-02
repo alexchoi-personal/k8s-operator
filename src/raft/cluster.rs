@@ -12,10 +12,7 @@ pub struct ClusterManager {
 }
 
 impl ClusterManager {
-    pub fn new(
-        node_manager: Arc<RaftNodeManager>,
-        discovery: HeadlessServiceDiscovery,
-    ) -> Self {
+    pub fn new(node_manager: Arc<RaftNodeManager>, discovery: HeadlessServiceDiscovery) -> Self {
         Self {
             node_manager,
             discovery,
@@ -47,15 +44,11 @@ impl ClusterManager {
 
             match self.discovery.discover_peers().await {
                 Ok(current_peers) => {
-                    let new_peers: Vec<u64> = current_peers
-                        .difference(&known_peers)
-                        .cloned()
-                        .collect();
+                    let new_peers: Vec<u64> =
+                        current_peers.difference(&known_peers).cloned().collect();
 
-                    let removed_peers: Vec<u64> = known_peers
-                        .difference(&current_peers)
-                        .cloned()
-                        .collect();
+                    let removed_peers: Vec<u64> =
+                        known_peers.difference(&current_peers).cloned().collect();
 
                     for peer_id in new_peers {
                         if let Err(e) = self.handle_new_peer(peer_id).await {

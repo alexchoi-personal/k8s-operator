@@ -52,14 +52,8 @@ async fn three_node_cluster_elects_one_leader() {
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    node0
-        .add_member(1, "127.0.0.1:19101".into())
-        .await
-        .unwrap();
-    node0
-        .add_member(2, "127.0.0.1:19102".into())
-        .await
-        .unwrap();
+    node0.add_member(1, "127.0.0.1:19101".into()).await.unwrap();
+    node0.add_member(2, "127.0.0.1:19102".into()).await.unwrap();
 
     node0.start_leadership_watcher();
     node1.start_leadership_watcher();
@@ -96,14 +90,8 @@ async fn leader_failure_triggers_new_election() {
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    node0
-        .add_member(1, "127.0.0.1:19201".into())
-        .await
-        .unwrap();
-    node0
-        .add_member(2, "127.0.0.1:19202".into())
-        .await
-        .unwrap();
+    node0.add_member(1, "127.0.0.1:19201".into()).await.unwrap();
+    node0.add_member(2, "127.0.0.1:19202".into()).await.unwrap();
 
     node0.start_leadership_watcher();
     node1.start_leadership_watcher();
@@ -177,10 +165,7 @@ async fn node_can_be_added_to_cluster() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    node0
-        .add_member(1, "127.0.0.1:19301".into())
-        .await
-        .unwrap();
+    node0.add_member(1, "127.0.0.1:19301".into()).await.unwrap();
 
     node1.start_leadership_watcher();
 
@@ -218,14 +203,8 @@ async fn node_can_be_removed_from_cluster() {
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    node0
-        .add_member(1, "127.0.0.1:19401".into())
-        .await
-        .unwrap();
-    node0
-        .add_member(2, "127.0.0.1:19402".into())
-        .await
-        .unwrap();
+    node0.add_member(1, "127.0.0.1:19401".into()).await.unwrap();
+    node0.add_member(2, "127.0.0.1:19402".into()).await.unwrap();
 
     node0.start_leadership_watcher();
     node1.start_leadership_watcher();

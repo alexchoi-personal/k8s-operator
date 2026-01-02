@@ -275,9 +275,16 @@ impl VolumeSource {
 
 #[derive(Clone, Debug)]
 pub enum ProjectedVolumeSource {
-    Secret { name: String },
-    ConfigMap { name: String },
-    ServiceAccountToken { path: String, expiration_seconds: Option<i64> },
+    Secret {
+        name: String,
+    },
+    ConfigMap {
+        name: String,
+    },
+    ServiceAccountToken {
+        path: String,
+        expiration_seconds: Option<i64>,
+    },
 }
 
 impl ProjectedVolumeSource {
@@ -316,8 +323,15 @@ impl ProjectedVolumeSource {
 
 #[derive(Clone, Debug)]
 pub enum DownwardApiItem {
-    FieldRef { path: String, field_path: String },
-    ResourceFieldRef { path: String, container_name: String, resource: String },
+    FieldRef {
+        path: String,
+        field_path: String,
+    },
+    ResourceFieldRef {
+        path: String,
+        container_name: String,
+        resource: String,
+    },
 }
 
 impl DownwardApiItem {

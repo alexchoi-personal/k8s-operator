@@ -36,20 +36,6 @@ pub struct RaftNodeManager<SM: StateMachine = KeyValueStateMachine> {
 
 impl RaftNodeManager<KeyValueStateMachine> {
     pub async fn new(config: RaftConfig) -> Result<Self> {
-        Self::new_with_state_machine(config, KeyValueStateMachine::default()).await
-    }
-
-    #[cfg(feature = "rocksdb")]
-    pub async fn new_with_rocksdb<P: AsRef<std::path::Path>>(
-        config: RaftConfig,
-        data_dir: P,
-    ) -> Result<Self> {
-        Self::new_with_rocksdb_state_machine(config, data_dir, KeyValueStateMachine::default()).await
-    }
-}
-
-impl<SM: StateMachine> RaftNodeManager<SM> {
-    pub async fn new_with_state_machine(config: RaftConfig, _machine: SM) -> Result<Self> {
         let raft_config = Arc::new(Config {
             cluster_name: config.cluster_name.clone(),
             election_timeout_min: config.election_timeout.as_millis() as u64,
@@ -58,9 +44,9 @@ impl<SM: StateMachine> RaftNodeManager<SM> {
             ..Default::default()
         });
 
-        let store = Arc::new(MemStore::<SM>::new());
+        let store = Arc::new(MemStore::<KeyValueStateMachine>::new());
         let (log_storage, state_machine) = Adaptor::new(store.clone());
-        let network = GrpcNetworkFactory::<SM>::with_tls(config.tls.clone());
+        let network = GrpcNetworkFactory::with_tls(config.tls.clone());
 
         let raft = Raft::new(
             config.node_id,
@@ -87,10 +73,9 @@ impl<SM: StateMachine> RaftNodeManager<SM> {
     }
 
     #[cfg(feature = "rocksdb")]
-    pub async fn new_with_rocksdb_state_machine<P: AsRef<std::path::Path>>(
+    pub async fn new_with_rocksdb<P: AsRef<std::path::Path>>(
         config: RaftConfig,
         data_dir: P,
-        machine: SM,
     ) -> Result<Self> {
         let raft_config = Arc::new(Config {
             cluster_name: config.cluster_name.clone(),
@@ -101,11 +86,11 @@ impl<SM: StateMachine> RaftNodeManager<SM> {
         });
 
         let store = Arc::new(
-            RocksDbStore::with_state_machine(data_dir, machine)
+            RocksDbStore::with_state_machine(data_dir, KeyValueStateMachine::default())
                 .map_err(|e| Error::Other(format!("Failed to open RocksDB: {:?}", e)))?,
         );
         let (log_storage, state_machine) = Adaptor::new(store.clone());
-        let network = GrpcNetworkFactory::<SM>::with_tls(config.tls.clone());
+        let network = GrpcNetworkFactory::with_tls(config.tls.clone());
 
         let raft = Raft::new(
             config.node_id,
@@ -131,6 +116,68 @@ impl<SM: StateMachine> RaftNodeManager<SM> {
         })
     }
 
+    pub async fn start_grpc_server(&self, port: u16) -> Result<()> {
+        let addr: SocketAddr = format!("0.0.0.0:{}", port)
+            .parse()
+            .map_err(|e| Error::Other(format!("Invalid address: {}", e)))?;
+
+        let raft = self.raft.clone();
+        let leader_election = self.leader_election.clone();
+        let node_id = self.config.node_id;
+        let tls = self.config.tls.clone();
+
+        tokio::spawn(async move {
+            if let Err(e) =
+                start_raft_server_with_health(raft, leader_election, node_id, addr, tls).await
+            {
+                tracing::error!("Raft gRPC server error: {:?}", e);
+            }
+        });
+
+        Ok(())
+    }
+
+    pub fn start_compaction_manager(&self) {
+        let compaction_manager = Arc::new(CompactionManager::new(
+            self.raft.clone(),
+            self.storage.clone(),
+            self.config.compaction.clone(),
+        ));
+
+        let shutdown_rx = self.graceful_shutdown.subscribe();
+        tokio::spawn(async move {
+            compaction_manager.run(shutdown_rx).await;
+        });
+    }
+
+    pub async fn bootstrap(&self) -> Result<()> {
+        let mut members = BTreeMap::new();
+        members.insert(
+            self.config.node_id,
+            RaftNode {
+                addr: self.get_node_addr(),
+            },
+        );
+
+        self.raft
+            .initialize(members)
+            .await
+            .map_err(|e| Error::Other(format!("Failed to bootstrap cluster: {:?}", e)))?;
+
+        Ok(())
+    }
+
+    fn get_node_addr(&self) -> String {
+        let pod_name =
+            std::env::var("POD_NAME").unwrap_or_else(|_| format!("pod-{}", self.config.node_id));
+        format!(
+            "{}.{}.{}.svc.cluster.local:8080",
+            pod_name, self.config.service_name, self.config.namespace
+        )
+    }
+}
+
+impl<SM: StateMachine> RaftNodeManager<SM> {
     pub fn start_leadership_watcher(&self) {
         let raft = self.raft.clone();
         let leader_election = self.leader_election.clone();
@@ -169,27 +216,6 @@ impl<SM: StateMachine> RaftNodeManager<SM> {
         self.graceful_shutdown.start_signal_handler();
     }
 
-    pub async fn start_grpc_server(&self, port: u16) -> Result<()> {
-        let addr: SocketAddr = format!("0.0.0.0:{}", port)
-            .parse()
-            .map_err(|e| Error::Other(format!("Invalid address: {}", e)))?;
-
-        let raft = self.raft.clone();
-        let leader_election = self.leader_election.clone();
-        let node_id = self.config.node_id;
-        let tls = self.config.tls.clone();
-
-        tokio::spawn(async move {
-            if let Err(e) =
-                start_raft_server_with_health::<SM>(raft, leader_election, node_id, addr, tls).await
-            {
-                tracing::error!("Raft gRPC server error: {:?}", e);
-            }
-        });
-
-        Ok(())
-    }
-
     pub async fn bootstrap_or_join(&self) -> Result<()> {
         let is_initialized = self
             .raft
@@ -206,17 +232,15 @@ impl<SM: StateMachine> RaftNodeManager<SM> {
             "Bootstrapping new cluster with node {}",
             self.config.node_id
         );
-        self.bootstrap_cluster().await
-    }
 
-    async fn bootstrap_cluster(&self) -> Result<()> {
         let mut members = BTreeMap::new();
-        members.insert(
-            self.config.node_id,
-            RaftNode {
-                addr: self.get_node_addr(),
-            },
+        let pod_name =
+            std::env::var("POD_NAME").unwrap_or_else(|_| format!("pod-{}", self.config.node_id));
+        let addr = format!(
+            "{}.{}.{}.svc.cluster.local:8080",
+            pod_name, self.config.service_name, self.config.namespace
         );
+        members.insert(self.config.node_id, RaftNode { addr });
 
         self.raft
             .initialize(members)
@@ -224,15 +248,6 @@ impl<SM: StateMachine> RaftNodeManager<SM> {
             .map_err(|e| Error::Other(format!("Failed to bootstrap cluster: {:?}", e)))?;
 
         Ok(())
-    }
-
-    fn get_node_addr(&self) -> String {
-        let pod_name = std::env::var("POD_NAME")
-            .unwrap_or_else(|_| format!("pod-{}", self.config.node_id));
-        format!(
-            "{}.{}.{}.svc.cluster.local:8080",
-            pod_name, self.config.service_name, self.config.namespace
-        )
     }
 
     pub fn raft(&self) -> &Arc<Raft<TypeConfig<SM>>> {
@@ -343,10 +358,7 @@ impl<SM: StateMachine> RaftNodeManager<SM> {
             .any(|id| id == self.config.node_id);
 
         if is_voter {
-            tracing::info!(
-                "Removing self (node {}) from cluster",
-                self.config.node_id
-            );
+            tracing::info!("Removing self (node {}) from cluster", self.config.node_id);
             self.remove_member(self.config.node_id).await?;
         }
         Ok(())
@@ -354,19 +366,6 @@ impl<SM: StateMachine> RaftNodeManager<SM> {
 
     pub fn graceful_shutdown(&self) -> &GracefulShutdown {
         &self.graceful_shutdown
-    }
-
-    pub fn start_compaction_manager(&self) {
-        let compaction_manager = Arc::new(CompactionManager::new(
-            self.raft.clone(),
-            self.storage.clone(),
-            self.config.compaction.clone(),
-        ));
-
-        let shutdown_rx = self.graceful_shutdown.subscribe();
-        tokio::spawn(async move {
-            compaction_manager.run(shutdown_rx).await;
-        });
     }
 
     pub fn start_cert_reloader(&self) {

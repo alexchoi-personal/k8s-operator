@@ -128,12 +128,14 @@ impl Container {
     }
 
     pub fn env_all_from_secret(mut self, secret_name: impl Into<String>) -> Self {
-        self.env_from.push(EnvFromSource::Secret(secret_name.into()));
+        self.env_from
+            .push(EnvFromSource::Secret(secret_name.into()));
         self
     }
 
     pub fn env_all_from_configmap(mut self, configmap_name: impl Into<String>) -> Self {
-        self.env_from.push(EnvFromSource::ConfigMap(configmap_name.into()));
+        self.env_from
+            .push(EnvFromSource::ConfigMap(configmap_name.into()));
         self
     }
 
@@ -142,11 +144,7 @@ impl Container {
         self
     }
 
-    pub fn volume_mount(
-        mut self,
-        name: impl Into<String>,
-        mount_path: impl Into<String>,
-    ) -> Self {
+    pub fn volume_mount(mut self, name: impl Into<String>, mount_path: impl Into<String>) -> Self {
         self.volume_mounts.push(VolumeMount {
             name: name.into(),
             mount_path: mount_path.into(),
@@ -200,7 +198,11 @@ impl Container {
             } else {
                 Some(self.command)
             },
-            args: if self.args.is_empty() { None } else { Some(self.args) },
+            args: if self.args.is_empty() {
+                None
+            } else {
+                Some(self.args)
+            },
             working_dir: self.working_dir,
             ports: if self.ports.is_empty() {
                 None

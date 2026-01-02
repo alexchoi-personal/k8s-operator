@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use openraft::{Raft, ServerState};
+use openraft::Raft;
 use parking_lot::RwLock;
 use tokio::sync::watch;
 

@@ -13,14 +13,21 @@ use std::time::Duration;
 use tracing::{error, info};
 
 #[cfg(feature = "ha")]
-use crate::raft::{ClusterManager, HeadlessServiceDiscovery, LeaderElection, RaftConfig, RaftNodeManager};
+use crate::raft::{
+    ClusterManager, HeadlessServiceDiscovery, LeaderElection, RaftConfig, RaftNodeManager,
+};
 
 pub type ReconcileFn<R> =
     Box<dyn Fn(Context<R>) -> Pin<Box<dyn Future<Output = Result<Action>> + Send>> + Send + Sync>;
 
 pub struct Operator<R>
 where
-    R: Resource<DynamicType = (), Scope = NamespaceResourceScope> + Clone + std::fmt::Debug + Send + Sync + 'static,
+    R: Resource<DynamicType = (), Scope = NamespaceResourceScope>
+        + Clone
+        + std::fmt::Debug
+        + Send
+        + Sync
+        + 'static,
     R: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
     reconcile_fn: Option<ReconcileFn<R>>,
@@ -35,7 +42,12 @@ where
 
 impl<R> Default for Operator<R>
 where
-    R: Resource<DynamicType = (), Scope = NamespaceResourceScope> + Clone + std::fmt::Debug + Send + Sync + 'static,
+    R: Resource<DynamicType = (), Scope = NamespaceResourceScope>
+        + Clone
+        + std::fmt::Debug
+        + Send
+        + Sync
+        + 'static,
     R: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
     fn default() -> Self {
@@ -45,7 +57,12 @@ where
 
 impl<R> Operator<R>
 where
-    R: Resource<DynamicType = (), Scope = NamespaceResourceScope> + Clone + std::fmt::Debug + Send + Sync + 'static,
+    R: Resource<DynamicType = (), Scope = NamespaceResourceScope>
+        + Clone
+        + std::fmt::Debug
+        + Send
+        + Sync
+        + 'static,
     R: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
     pub fn new() -> Self {
@@ -112,15 +129,14 @@ where
     pub async fn run(self) -> Result<()> {
         let client = Client::try_default().await.map_err(Error::Kube)?;
 
-        info!(
-            "Starting operator for {}/{}",
-            R::group(&()),
-            R::kind(&())
-        );
+        info!("Starting operator for {}/{}", R::group(&()), R::kind(&()));
 
         let api: Api<R> = Api::all(client.clone());
 
-        let reconcile_fn = Arc::new(self.reconcile_fn.ok_or(Error::MissingField("reconcile_fn"))?);
+        let reconcile_fn = Arc::new(
+            self.reconcile_fn
+                .ok_or(Error::MissingField("reconcile_fn"))?,
+        );
         let delete_fn = self.delete_fn.map(Arc::new);
         let finalizer = self.finalizer.clone();
         let default_requeue = self.requeue_after;
@@ -148,11 +164,8 @@ where
 
             let node_manager = Arc::new(node_manager);
 
-            let discovery = HeadlessServiceDiscovery::new(
-                &config.service_name,
-                &config.namespace,
-                8080,
-            );
+            let discovery =
+                HeadlessServiceDiscovery::new(&config.service_name, &config.namespace, 8080);
             let cluster_manager = Arc::new(ClusterManager::new(node_manager.clone(), discovery));
             cluster_manager.start_membership_watcher();
 
@@ -202,7 +215,12 @@ where
 
 struct ControllerContext<R>
 where
-    R: Resource<DynamicType = (), Scope = NamespaceResourceScope> + Clone + std::fmt::Debug + Send + Sync + 'static,
+    R: Resource<DynamicType = (), Scope = NamespaceResourceScope>
+        + Clone
+        + std::fmt::Debug
+        + Send
+        + Sync
+        + 'static,
     R: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
     client: Client,
@@ -218,7 +236,12 @@ where
 
 impl<R> Clone for ControllerContext<R>
 where
-    R: Resource<DynamicType = (), Scope = NamespaceResourceScope> + Clone + std::fmt::Debug + Send + Sync + 'static,
+    R: Resource<DynamicType = (), Scope = NamespaceResourceScope>
+        + Clone
+        + std::fmt::Debug
+        + Send
+        + Sync
+        + 'static,
     R: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
     fn clone(&self) -> Self {
@@ -240,7 +263,12 @@ async fn reconcile_wrapper<R>(
     ctx: ControllerContext<R>,
 ) -> std::result::Result<Action, Error>
 where
-    R: Resource<DynamicType = (), Scope = NamespaceResourceScope> + Clone + std::fmt::Debug + Send + Sync + 'static,
+    R: Resource<DynamicType = (), Scope = NamespaceResourceScope>
+        + Clone
+        + std::fmt::Debug
+        + Send
+        + Sync
+        + 'static,
     R: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
     #[cfg(feature = "ha")]
@@ -260,16 +288,10 @@ where
         namespace
     );
 
-    let is_deleted = resource
-        .meta()
-        .deletion_timestamp
-        .is_some();
+    let is_deleted = resource.meta().deletion_timestamp.is_some();
 
     if let Some(ref finalizer_name) = ctx.finalizer {
-        let has_finalizer = resource
-            .finalizers()
-            .iter()
-            .any(|f| f == finalizer_name);
+        let has_finalizer = resource.finalizers().iter().any(|f| f == finalizer_name);
 
         if is_deleted {
             if has_finalizer {
@@ -278,7 +300,8 @@ where
                     delete_fn(context).await?;
                 }
 
-                remove_finalizer(&ctx.client, resource.as_ref(), &namespace, finalizer_name).await?;
+                remove_finalizer(&ctx.client, resource.as_ref(), &namespace, finalizer_name)
+                    .await?;
             }
             return Ok(Action::await_change());
         } else if !has_finalizer {
@@ -296,13 +319,14 @@ where
     (ctx.reconcile_fn)(context).await
 }
 
-fn error_policy<R>(
-    resource: Arc<R>,
-    error: &Error,
-    ctx: Arc<ControllerContext<R>>,
-) -> Action
+fn error_policy<R>(resource: Arc<R>, error: &Error, ctx: Arc<ControllerContext<R>>) -> Action
 where
-    R: Resource<DynamicType = (), Scope = NamespaceResourceScope> + Clone + std::fmt::Debug + Send + Sync + 'static,
+    R: Resource<DynamicType = (), Scope = NamespaceResourceScope>
+        + Clone
+        + std::fmt::Debug
+        + Send
+        + Sync
+        + 'static,
     R: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
     let name = resource.name_any();
@@ -317,7 +341,12 @@ async fn add_finalizer<R>(
     finalizer: &str,
 ) -> Result<()>
 where
-    R: Resource<DynamicType = (), Scope = NamespaceResourceScope> + Clone + std::fmt::Debug + Send + Sync + 'static,
+    R: Resource<DynamicType = (), Scope = NamespaceResourceScope>
+        + Clone
+        + std::fmt::Debug
+        + Send
+        + Sync
+        + 'static,
     R: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
     let api: Api<R> = Api::namespaced(client.clone(), namespace);
@@ -343,7 +372,12 @@ async fn remove_finalizer<R>(
     finalizer: &str,
 ) -> Result<()>
 where
-    R: Resource<DynamicType = (), Scope = NamespaceResourceScope> + Clone + std::fmt::Debug + Send + Sync + 'static,
+    R: Resource<DynamicType = (), Scope = NamespaceResourceScope>
+        + Clone
+        + std::fmt::Debug
+        + Send
+        + Sync
+        + 'static,
     R: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
     let api: Api<R> = Api::namespaced(client.clone(), namespace);

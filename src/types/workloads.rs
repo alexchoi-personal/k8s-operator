@@ -118,7 +118,12 @@ impl ChildResource for Deployment {
                         init_containers: if self.init_containers.is_empty() {
                             None
                         } else {
-                            Some(self.init_containers.into_iter().map(|c| c.into_k8s()).collect())
+                            Some(
+                                self.init_containers
+                                    .into_iter()
+                                    .map(|c| c.into_k8s())
+                                    .collect(),
+                            )
                         },
                         volumes: if self.volumes.is_empty() {
                             None
@@ -265,7 +270,12 @@ impl ChildResource for StatefulSet {
                         init_containers: if self.init_containers.is_empty() {
                             None
                         } else {
-                            Some(self.init_containers.into_iter().map(|c| c.into_k8s()).collect())
+                            Some(
+                                self.init_containers
+                                    .into_iter()
+                                    .map(|c| c.into_k8s())
+                                    .collect(),
+                            )
                         },
                         volumes: if self.volumes.is_empty() {
                             None
@@ -387,7 +397,12 @@ impl ChildResource for DaemonSet {
                         init_containers: if self.init_containers.is_empty() {
                             None
                         } else {
-                            Some(self.init_containers.into_iter().map(|c| c.into_k8s()).collect())
+                            Some(
+                                self.init_containers
+                                    .into_iter()
+                                    .map(|c| c.into_k8s())
+                                    .collect(),
+                            )
                         },
                         volumes: if self.volumes.is_empty() {
                             None
@@ -533,7 +548,12 @@ impl ChildResource for Job {
                         init_containers: if self.init_containers.is_empty() {
                             None
                         } else {
-                            Some(self.init_containers.into_iter().map(|c| c.into_k8s()).collect())
+                            Some(
+                                self.init_containers
+                                    .into_iter()
+                                    .map(|c| c.into_k8s())
+                                    .collect(),
+                            )
                         },
                         volumes: if self.volumes.is_empty() {
                             None

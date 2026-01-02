@@ -123,14 +123,8 @@ async fn rocksdb_three_node_cluster() {
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    node0
-        .add_member(1, "127.0.0.1:19701".into())
-        .await
-        .unwrap();
-    node0
-        .add_member(2, "127.0.0.1:19702".into())
-        .await
-        .unwrap();
+    node0.add_member(1, "127.0.0.1:19701".into()).await.unwrap();
+    node0.add_member(2, "127.0.0.1:19702".into()).await.unwrap();
 
     node0.start_leadership_watcher();
     node1.start_leadership_watcher();

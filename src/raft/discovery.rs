@@ -18,10 +18,7 @@ impl HeadlessServiceDiscovery {
     }
 
     pub async fn discover_peers(&self) -> Result<BTreeSet<u64>> {
-        let dns_name = format!(
-            "{}.{}.svc.cluster.local",
-            self.service_name, self.namespace
-        );
+        let dns_name = format!("{}.{}.svc.cluster.local", self.service_name, self.namespace);
 
         let mut peers = BTreeSet::new();
 

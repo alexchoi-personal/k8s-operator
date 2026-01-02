@@ -190,11 +190,7 @@ impl<SM: StateMachine> RaftStorage<TypeConfig<SM>> for Arc<MemStore<SM>> {
         log_id: LogId<u64>,
     ) -> Result<(), StorageError<u64>> {
         let mut inner = self.inner.write().await;
-        let keys_to_remove: Vec<_> = inner
-            .log
-            .range(log_id.index..)
-            .map(|(k, _)| *k)
-            .collect();
+        let keys_to_remove: Vec<_> = inner.log.range(log_id.index..).map(|(k, _)| *k).collect();
         for key in keys_to_remove {
             inner.log.remove(&key);
         }
@@ -204,11 +200,7 @@ impl<SM: StateMachine> RaftStorage<TypeConfig<SM>> for Arc<MemStore<SM>> {
     async fn purge_logs_upto(&mut self, log_id: LogId<u64>) -> Result<(), StorageError<u64>> {
         let mut inner = self.inner.write().await;
         inner.last_purged_log_id = Some(log_id);
-        let keys_to_remove: Vec<_> = inner
-            .log
-            .range(..=log_id.index)
-            .map(|(k, _)| *k)
-            .collect();
+        let keys_to_remove: Vec<_> = inner.log.range(..=log_id.index).map(|(k, _)| *k).collect();
         for key in keys_to_remove {
             inner.log.remove(&key);
         }

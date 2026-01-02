@@ -90,14 +90,14 @@ where
         let patch = Patch::Apply(&k8s_resource);
         let params = PatchParams::apply("k8s-operator").force();
 
-        api.patch(&name, &params, &patch)
-            .await
-            .map_err(Error::Kube)
+        api.patch(&name, &params, &patch).await.map_err(Error::Kube)
     }
 
     pub async fn delete<T>(&self, name: &str) -> Result<()>
     where
-        T: kube::Resource<DynamicType = (), Scope = NamespaceResourceScope> + Clone + std::fmt::Debug,
+        T: kube::Resource<DynamicType = (), Scope = NamespaceResourceScope>
+            + Clone
+            + std::fmt::Debug,
         T: serde::Serialize + for<'de> serde::Deserialize<'de>,
     {
         let api: Api<T> = Api::namespaced(self.client.clone(), &self.namespace);
@@ -111,7 +111,9 @@ where
 
     pub async fn get<T>(&self, name: &str) -> Result<Option<T>>
     where
-        T: kube::Resource<DynamicType = (), Scope = NamespaceResourceScope> + Clone + std::fmt::Debug,
+        T: kube::Resource<DynamicType = (), Scope = NamespaceResourceScope>
+            + Clone
+            + std::fmt::Debug,
         T: serde::Serialize + for<'de> serde::Deserialize<'de>,
     {
         let api: Api<T> = Api::namespaced(self.client.clone(), &self.namespace);
@@ -125,7 +127,9 @@ where
 
     pub async fn list<T>(&self, selector: Option<&str>) -> Result<Vec<T>>
     where
-        T: kube::Resource<DynamicType = (), Scope = NamespaceResourceScope> + Clone + std::fmt::Debug,
+        T: kube::Resource<DynamicType = (), Scope = NamespaceResourceScope>
+            + Clone
+            + std::fmt::Debug,
         T: serde::Serialize + for<'de> serde::Deserialize<'de>,
     {
         let api: Api<T> = Api::namespaced(self.client.clone(), &self.namespace);
@@ -218,7 +222,9 @@ where
             last_timestamp: Some(Time(now)),
             count: Some(1),
             reporting_component: Some("k8s-operator".to_string()),
-            reporting_instance: Some(std::env::var("POD_NAME").unwrap_or_else(|_| "operator".to_string())),
+            reporting_instance: Some(
+                std::env::var("POD_NAME").unwrap_or_else(|_| "operator".to_string()),
+            ),
             ..Default::default()
         };
 

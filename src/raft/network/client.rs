@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
-use std::marker::PhantomData;
 use std::time::Duration;
 
 use openraft::error::{InstallSnapshotError, RPCError, RaftError, Unreachable};
@@ -15,7 +14,7 @@ use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 use super::proto::raft_service_client::RaftServiceClient;
 use super::proto::{self as pb};
 use crate::raft::config::TlsConfig;
-use crate::raft::types::{KeyValueStateMachine, RaftNode, RaftRequest, StateMachine, TypeConfig};
+use crate::raft::types::{RaftNode, RaftRequest, TypeConfig};
 
 #[derive(Debug)]
 struct ConnectionError(String);
@@ -28,23 +27,21 @@ impl fmt::Display for ConnectionError {
 
 impl std::error::Error for ConnectionError {}
 
-pub struct GrpcRaftClient<SM: StateMachine = KeyValueStateMachine> {
+pub struct GrpcRaftClient {
     #[allow(dead_code)]
     target_id: u64,
     addr: String,
     tls: TlsConfig,
     client: Option<RaftServiceClient<Channel>>,
-    _marker: PhantomData<SM>,
 }
 
-impl<SM: StateMachine> GrpcRaftClient<SM> {
+impl GrpcRaftClient {
     pub fn new(target_id: u64, node: &RaftNode, tls: TlsConfig) -> Self {
         Self {
             target_id,
             addr: node.addr.clone(),
             tls,
             client: None,
-            _marker: PhantomData,
         }
     }
 
@@ -54,7 +51,11 @@ impl<SM: StateMachine> GrpcRaftClient<SM> {
 
     async fn get_client(&mut self) -> Result<&mut RaftServiceClient<Channel>, ConnectionError> {
         if self.client.is_none() {
-            let scheme = if self.tls.is_enabled() { "https" } else { "http" };
+            let scheme = if self.tls.is_enabled() {
+                "https"
+            } else {
+                "http"
+            };
             let endpoint = format!("{}://{}", scheme, self.addr);
             let mut channel_builder = Channel::from_shared(endpoint)
                 .map_err(|e| ConnectionError(e.to_string()))?
@@ -89,9 +90,15 @@ impl<SM: StateMachine> GrpcRaftClient<SM> {
         }
 
         if self.tls.is_mtls() {
-            let cert_path = self.tls.cert.as_ref()
+            let cert_path = self
+                .tls
+                .cert
+                .as_ref()
                 .ok_or_else(|| ConnectionError("mTLS requires cert path".into()))?;
-            let key_path = self.tls.key.as_ref()
+            let key_path = self
+                .tls
+                .key
+                .as_ref()
                 .ok_or_else(|| ConnectionError("mTLS requires key path".into()))?;
 
             let cert = tokio::fs::read(cert_path)
@@ -135,7 +142,7 @@ fn log_id_from_proto(l: pb::LogId) -> LogId<u64> {
     LogId::new(openraft::LeaderId::new(l.term, 0), l.index)
 }
 
-fn entry_to_proto(entry: &Entry<TypeConfig<KeyValueStateMachine>>) -> pb::Entry {
+fn entry_to_proto(entry: &Entry<TypeConfig>) -> pb::Entry {
     let payload = match &entry.payload {
         EntryPayload::Blank => pb::EntryPayload {
             payload: Some(pb::entry_payload::Payload::Blank(pb::Empty {})),
@@ -154,8 +161,11 @@ fn entry_to_proto(entry: &Entry<TypeConfig<KeyValueStateMachine>>) -> pb::Entry 
                     let nodes: HashMap<u64, pb::RaftNode> = cfg
                         .iter()
                         .map(|id| {
-                            let node = mem.get_node(id)
-                                .map(|n| pb::RaftNode { addr: n.addr.clone() })
+                            let node = mem
+                                .get_node(id)
+                                .map(|n| pb::RaftNode {
+                                    addr: n.addr.clone(),
+                                })
                                 .unwrap_or_default();
                             (*id, node)
                         })
@@ -164,9 +174,9 @@ fn entry_to_proto(entry: &Entry<TypeConfig<KeyValueStateMachine>>) -> pb::Entry 
                 })
                 .collect();
             pb::EntryPayload {
-                payload: Some(pb::entry_payload::Payload::Membership(pb::MembershipPayload {
-                    configs,
-                })),
+                payload: Some(pb::entry_payload::Payload::Membership(
+                    pb::MembershipPayload { configs },
+                )),
             }
         }
     };
@@ -178,7 +188,7 @@ fn entry_to_proto(entry: &Entry<TypeConfig<KeyValueStateMachine>>) -> pb::Entry 
 }
 
 #[allow(dead_code)]
-fn entry_from_proto(e: pb::Entry) -> Entry<TypeConfig<KeyValueStateMachine>> {
+fn entry_from_proto(e: pb::Entry) -> Entry<TypeConfig> {
     let log_id = e.log_id.map(log_id_from_proto).unwrap_or_default();
     let payload = match e.payload.and_then(|p| p.payload) {
         Some(pb::entry_payload::Payload::Blank(_)) => EntryPayload::Blank,
@@ -214,10 +224,10 @@ fn entry_from_proto(e: pb::Entry) -> Entry<TypeConfig<KeyValueStateMachine>> {
     Entry { log_id, payload }
 }
 
-impl RaftNetwork<TypeConfig<KeyValueStateMachine>> for GrpcRaftClient<KeyValueStateMachine> {
+impl RaftNetwork<TypeConfig> for GrpcRaftClient {
     async fn append_entries(
         &mut self,
-        rpc: AppendEntriesRequest<TypeConfig<KeyValueStateMachine>>,
+        rpc: AppendEntriesRequest<TypeConfig>,
         _option: RPCOption,
     ) -> Result<AppendEntriesResponse<u64>, RPCError<u64, RaftNode, RaftError<u64>>> {
         let client = self
@@ -279,7 +289,7 @@ impl RaftNetwork<TypeConfig<KeyValueStateMachine>> for GrpcRaftClient<KeyValueSt
 
     async fn install_snapshot(
         &mut self,
-        rpc: InstallSnapshotRequest<TypeConfig<KeyValueStateMachine>>,
+        rpc: InstallSnapshotRequest<TypeConfig>,
         _option: RPCOption,
     ) -> Result<
         InstallSnapshotResponse<u64>,
